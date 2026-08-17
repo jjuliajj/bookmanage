@@ -53,6 +53,7 @@ export const STOREFRONTS: StorefrontSite[] = [
   { id: 'orderpages', code: 'orderpages', name: 'OrderPages', domain: 'order-pages.vercel.app', themeColor: '#0D9488', badgeBg: 'bg-cyan-50 border-cyan-200', badgeText: 'text-cyan-800', description: 'Linear Reader Bookshop' },
   { id: 'picktomes', code: 'picktomes', name: 'PickTomes', domain: 'pick-tomes.vercel.app', themeColor: '#B45309', badgeBg: 'bg-orange-50 border-orange-200', badgeText: 'text-orange-800', description: 'Linen & Ink Archival Tome Vault' },
   { id: 'readcart', code: 'readcart', name: 'ReadCart', domain: 'read-cart.vercel.app', themeColor: '#9333EA', badgeBg: 'bg-fuchsia-50 border-fuchsia-200', badgeText: 'text-fuchsia-800', description: 'Instant Digital Reader Cart' },
+  { id: 'bookpatr', code: 'bookpatr', name: 'BookPatr', domain: 'www.logicnode.ink', themeColor: '#E11D48', badgeBg: 'bg-rose-50 border-rose-200', badgeText: 'text-rose-800', description: 'Artisanal Literature & eBook Market' },
 ];
 
 export const getBooks = (site?: string) => {

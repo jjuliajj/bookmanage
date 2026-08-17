@@ -559,8 +559,8 @@ export default function BookManagePage() {
                   onChange={(e) => setSelectedSite(e.target.value)}
                   className="w-full pl-10 pr-10 py-3 rounded-2xl border-2 border-indigo-600 bg-indigo-50/50 text-indigo-950 font-bold text-sm focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer appearance-none shadow-sm"
                 >
-                  <option value="all">🌐 Tất cả 10 Trang Web (Xem tổng hợp)</option>
-                  <optgroup label="Danh sách 10 Website">
+                  <option value="all">🌐 Tất cả các trang web ({STOREFRONTS.length} Stores - Xem tổng hợp)</option>
+                  <optgroup label={`Danh sách ${STOREFRONTS.length} Website`}>
                     {STOREFRONTS.map((site) => (
                       <option key={site.id} value={site.id}>
                         {site.name} ({site.domain})
