@@ -29,7 +29,8 @@ import {
   Store,
   ChevronRight,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  ChevronDown
 } from "lucide-react";
 import { 
   getBooks, 
@@ -52,7 +53,8 @@ import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
 export default function BookManagePage() {
   const [activeTab, setActiveTab] = useState<'books' | 'stripe'>('books');
-  const [selectedSite, setSelectedSite] = useState<string>('all');
+  // Default to first storefront or 'all'
+  const [selectedSite, setSelectedSite] = useState<string>('bookbazaar');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -72,7 +74,7 @@ export default function BookManagePage() {
   const [isStripeModalOpen, setIsStripeModalOpen] = useState(false);
   const [editingStripeSetting, setEditingStripeSetting] = useState<StripeSetting | null>(null);
   const [stripeFormData, setStripeFormData] = useState({
-    site_id: "all",
+    site_id: "bookbazaar",
     account_name: "",
     publishable_key: "",
     secret_key: "",
@@ -87,7 +89,7 @@ export default function BookManagePage() {
 
   // Form states
   const [formData, setFormData] = useState({
-    site_id: "all",
+    site_id: "bookbazaar",
     title: "",
     author: "",
     description: "",
@@ -101,7 +103,6 @@ export default function BookManagePage() {
 
   // Bulk upload states
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [bulkSite, setBulkSite] = useState("all");
   const [bulkBookFiles, setBulkBookFiles] = useState<File[]>([]);
   const [bulkCoverFiles, setBulkCoverFiles] = useState<File[]>([]);
   const [bulkAuthor, setBulkAuthor] = useState("Martin Chavez");
@@ -141,20 +142,20 @@ export default function BookManagePage() {
 
   const currentStorefront = STOREFRONTS.find(s => s.id === selectedSite);
 
-  // Live count of books per storefront
-  const bookCountBySite = useMemo(() => {
-    const counts: Record<string, number> = { all: books.length };
-    STOREFRONTS.forEach(s => { counts[s.id] = 0; });
-    books.forEach(b => {
-      const site = b.site_id || 'all';
-      if (site === 'all') {
-        STOREFRONTS.forEach(s => { counts[s.id] = (counts[s.id] || 0) + 1; });
-      } else if (counts[site] !== undefined) {
-        counts[site] = (counts[site] || 0) + 1;
-      }
-    });
-    return counts;
-  }, [books]);
+  // Filter stripe settings for current selected site
+  const currentSiteStripeSettings = useMemo(() => {
+    if (selectedSite === 'all') return stripeSettings;
+    return stripeSettings.filter(s => s.site_id === selectedSite || s.site_id === 'all');
+  }, [stripeSettings, selectedSite]);
+
+  const activeStripeSettingForSite = useMemo(() => {
+    if (selectedSite === 'all') {
+      return stripeSettings.find(s => s.is_active);
+    }
+    // Find active for this specific site first, then active global
+    return stripeSettings.find(s => s.site_id === selectedSite && s.is_active) || 
+           stripeSettings.find(s => (s.site_id === 'all' || !s.site_id) && s.is_active);
+  }, [stripeSettings, selectedSite]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this book?")) return;
@@ -202,8 +203,8 @@ export default function BookManagePage() {
 
   const handleDeleteAll = async () => {
     if (books.length === 0) return;
-    const siteLabel = selectedSite === 'all' ? 'ALL books across all stores' : `ALL books for ${currentStorefront?.name || selectedSite}`;
-    if (!confirm(`WARNING: Are you sure you want to delete ${siteLabel}? This cannot be undone!`)) return;
+    const siteLabel = selectedSite === 'all' ? 'TẤT CẢ sách trên hệ thống' : `tất cả sách của ${currentStorefront?.name || selectedSite}`;
+    if (!confirm(`CẢNH BÁO: Bạn có chắc chắn muốn xóa ${siteLabel}? Hành động này không thể hoàn tác!`)) return;
 
     try {
       setIsSubmitting(true);
@@ -225,13 +226,13 @@ export default function BookManagePage() {
     setSelectedPriceFilter("");
   };
 
-  const handleStartAddStripeSetting = (targetSiteId?: string) => {
+  const handleStartAddStripeSetting = () => {
     setEditingStripeSetting(null);
-    const defaultSite = targetSiteId || (selectedSite !== 'all' ? selectedSite : 'bookbazaar');
-    const siteObj = STOREFRONTS.find(s => s.id === defaultSite);
+    const targetSite = selectedSite !== 'all' ? selectedSite : 'bookbazaar';
+    const siteObj = STOREFRONTS.find(s => s.id === targetSite);
     setStripeFormData({ 
-      site_id: defaultSite,
-      account_name: siteObj ? `${siteObj.name} Primary Gateway` : "Main Stripe Account",
+      site_id: targetSite,
+      account_name: siteObj ? `${siteObj.name} Primary Gateway` : "Main Stripe Gateway",
       publishable_key: "", 
       secret_key: "", 
       is_active: true 
@@ -242,7 +243,7 @@ export default function BookManagePage() {
   const handleStartEditStripeSetting = (setting: StripeSetting) => {
     setEditingStripeSetting(setting);
     setStripeFormData({
-      site_id: setting.site_id || "all",
+      site_id: setting.site_id || (selectedSite !== 'all' ? selectedSite : "bookbazaar"),
       account_name: setting.account_name,
       publishable_key: setting.publishable_key || "",
       secret_key: setting.secret_key || "",
@@ -312,7 +313,7 @@ export default function BookManagePage() {
         const randomPrice = prices[Math.floor(Math.random() * prices.length)];
 
         await updateBook(book.id, {
-          site_id: book.site_id || selectedSite || 'all',
+          site_id: book.site_id || selectedSite || 'bookbazaar',
           title: book.title,
           author: book.author,
           category: book.category,
@@ -322,7 +323,7 @@ export default function BookManagePage() {
 
       await fetchBooks();
       setIsRandomPriceModalOpen(false);
-      alert(`Successfully assigned random prices to ${targetBooks.length} books!`);
+      alert(`Đã gán giá ngẫu nhiên thành công cho ${targetBooks.length} cuốn sách của ${currentStorefront?.name || 'trang web'}!`);
     } catch (error) {
       console.error("Bulk price randomization failed:", error);
       alert("Failed to randomize prices. Check console for details.");
@@ -354,7 +355,7 @@ export default function BookManagePage() {
   const handleEdit = (book: Book) => {
     setEditingBook(book);
     setFormData({
-      site_id: book.site_id || "all",
+      site_id: book.site_id || (selectedSite !== 'all' ? selectedSite : "bookbazaar"),
       title: book.title,
       author: book.author,
       description: cleanExtractedDescription(book.description || ""),
@@ -368,7 +369,7 @@ export default function BookManagePage() {
 
   const resetForm = () => {
     setFormData({
-      site_id: selectedSite !== 'all' ? selectedSite : 'all',
+      site_id: selectedSite !== 'all' ? selectedSite : 'bookbazaar',
       title: "",
       author: "",
       description: "",
@@ -389,7 +390,7 @@ export default function BookManagePage() {
 
     try {
       const data = new FormData();
-      data.append("site_id", formData.site_id || (selectedSite !== 'all' ? selectedSite : 'all'));
+      data.append("site_id", formData.site_id || (selectedSite !== 'all' ? selectedSite : 'bookbazaar'));
       data.append("title", formData.title);
       data.append("author", formData.author);
       data.append("description", formData.description);
@@ -421,7 +422,7 @@ export default function BookManagePage() {
     setIsSubmitting(true);
     setBulkProgress({ current: 0, total: bulkBookFiles.length });
 
-    const targetSiteId = bulkSite || (selectedSite !== 'all' ? selectedSite : 'all');
+    const targetSiteId = selectedSite !== 'all' ? selectedSite : 'bookbazaar';
 
     try {
       for (let i = 0; i < bulkBookFiles.length; i++) {
@@ -473,7 +474,7 @@ export default function BookManagePage() {
       setBulkBookFiles([]);
       setBulkCoverFiles([]);
       setIsBulkModalOpen(false);
-      alert(`Successfully archived ${bulkBookFiles.length} books for ${targetSiteId.toUpperCase()}!`);
+      alert(`Đã upload thành công ${bulkBookFiles.length} cuốn sách lên website ${targetSiteId.toUpperCase()}!`);
     } catch (error) {
       console.error("Bulk upload failed:", error);
       alert("Bulk upload failed at index " + bulkProgress.current);
@@ -523,125 +524,99 @@ export default function BookManagePage() {
   const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
   const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
 
-  // Group stripe settings by site
-  const stripeBySite = useMemo(() => {
-    const map: Record<string, StripeSetting[]> = {};
-    stripeSettings.forEach(s => {
-      const site = s.site_id || 'all';
-      if (!map[site]) map[site] = [];
-      map[site].push(s);
-    });
-    return map;
-  }, [stripeSettings]);
-
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto space-y-6">
         
-        {/* Top Header */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-200">
-                <Store className="w-5 h-5" />
-              </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-                  Bookpatr Multi-Storefront Engine
+        {/* Main Header & Website Dropdown Selector */}
+        <header className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-200 flex-shrink-0">
+              <Store className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+                  Book Management System
                 </h1>
-                <p className="text-xs sm:text-sm text-slate-500 font-medium">
-                  Unified control dashboard managing 10 bookstore storefronts & isolated Stripe gateways.
-                </p>
               </div>
+              <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
+                Quản lý kho sách và cấu hình cổng thanh toán Stripe riêng biệt cho từng website.
+              </p>
             </div>
           </div>
 
-          <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 w-full md:w-auto">
-            <button 
-              onClick={() => setActiveTab('books')}
-              className={`flex-1 md:flex-none px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
-                activeTab === 'books'
-                  ? 'bg-white text-indigo-600 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <BookIcon className="w-4 h-4" />
-              Book Management ({books.length})
-            </button>
-            <button 
-              onClick={() => setActiveTab('stripe')}
-              className={`flex-1 md:flex-none px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
-                activeTab === 'stripe'
-                  ? 'bg-white text-indigo-600 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <CreditCard className="w-4 h-4" />
-              Stripe Gateways ({stripeSettings.length})
-            </button>
+          {/* WEBSITE SELECTOR DROPDOWN */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+            <div className="relative flex-grow sm:w-80">
+              <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                Chọn Website Cần Quản Lý:
+              </label>
+              <div className="relative">
+                <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600 pointer-events-none" />
+                <select
+                  value={selectedSite}
+                  onChange={(e) => setSelectedSite(e.target.value)}
+                  className="w-full pl-10 pr-10 py-3 rounded-2xl border-2 border-indigo-600 bg-indigo-50/50 text-indigo-950 font-bold text-sm focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer appearance-none shadow-sm"
+                >
+                  <option value="all">🌐 Tất cả 10 Trang Web (Xem tổng hợp)</option>
+                  <optgroup label="Danh sách 10 Website">
+                    {STOREFRONTS.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name} ({site.domain})
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* View Switcher: Books / Stripe */}
+            <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 self-end sm:self-auto mt-auto">
+              <button 
+                onClick={() => setActiveTab('books')}
+                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
+                  activeTab === 'books'
+                    ? 'bg-white text-indigo-600 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <BookIcon className="w-4 h-4" />
+                Sách ({books.length})
+              </button>
+              <button 
+                onClick={() => setActiveTab('stripe')}
+                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
+                  activeTab === 'stripe'
+                    ? 'bg-white text-indigo-600 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <CreditCard className="w-4 h-4" />
+                Stripe ({currentSiteStripeSettings.length})
+              </button>
+            </div>
           </div>
         </header>
 
-        {/* Storefront Website Selector Bar */}
-        <section className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Globe className="w-4 h-4 text-indigo-500" /> Target Bookstore Storefront (10 Sites)
-            </span>
-            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
-              Active Scope: {selectedSite === 'all' ? 'All 10 Storefronts' : currentStorefront?.name}
+        {/* Current Selected Site Info Ribbon */}
+        <div className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 shadow-md">
+          <div className="flex items-center gap-3">
+            <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+            <span className="text-xs sm:text-sm font-bold">
+              Đang làm việc trên: <span className="text-indigo-300 font-extrabold text-sm sm:text-base">{selectedSite === 'all' ? 'Tất cả các website' : currentStorefront?.name}</span>
+              {currentStorefront?.domain && (
+                <span className="text-slate-400 font-mono text-xs ml-2">({currentStorefront.domain})</span>
+              )}
             </span>
           </div>
 
-          <div className="flex flex-wrap gap-2 pt-1">
-            {/* All Stores Option */}
-            <button
-              onClick={() => setSelectedSite('all')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border ${
-                selectedSite === 'all'
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm scale-102'
-                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              <span>All 10 Websites</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                selectedSite === 'all' ? 'bg-slate-800 text-slate-200' : 'bg-slate-200 text-slate-600'
-              }`}>
-                {bookCountBySite.all || 0}
-              </span>
-            </button>
-
-            {/* Individual Storefront Pills */}
-            {STOREFRONTS.map((site) => {
-              const isSelected = selectedSite === site.id;
-              const hasActiveStripe = (stripeBySite[site.id] || []).some(s => s.is_active);
-
-              return (
-                <button
-                  key={site.id}
-                  onClick={() => setSelectedSite(site.id)}
-                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200 scale-102'
-                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isSelected ? '#FFFFFF' : site.themeColor }} />
-                  <span>{site.name}</span>
-                  {hasActiveStripe && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Stripe Gateway Active" />
-                  )}
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                    isSelected ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {bookCountBySite[site.id] || 0}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="flex items-center gap-4 text-xs text-slate-300">
+            <span>📚 Sách: <strong className="text-white">{books.length}</strong> cuốn</span>
+            <span>💳 Cổng Stripe: <strong className="text-white">{activeStripeSettingForSite ? activeStripeSettingForSite.account_name : 'Mặc định (.env)'}</strong></span>
           </div>
-        </section>
+        </div>
 
         {activeTab === 'books' ? (
           <>
@@ -655,7 +630,7 @@ export default function BookManagePage() {
                     className="bg-rose-50 text-rose-600 border border-rose-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-100 transition-all text-xs disabled:opacity-50"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Delete Selected ({selectedBookIds.length})
+                    Xóa Đã Chọn ({selectedBookIds.length})
                   </button>
                 )}
                 
@@ -666,7 +641,7 @@ export default function BookManagePage() {
                     className="bg-red-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-red-700 transition-all text-xs shadow-sm shadow-red-200 disabled:opacity-50"
                   >
                     <Trash className="w-4 h-4" />
-                    Delete All ({books.length})
+                    Xóa Tất Cả ({books.length})
                   </button>
                 )}
               </div>
@@ -677,30 +652,27 @@ export default function BookManagePage() {
                   className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-100 transition-all text-xs"
                 >
                   <Dices className="w-4 h-4 text-emerald-600" />
-                  Randomize Prices
+                  Random Giá Sách
                 </button>
                 <button 
-                  onClick={() => {
-                    setBulkSite(selectedSite !== 'all' ? selectedSite : 'bookbazaar');
-                    setIsBulkModalOpen(true);
-                  }}
+                  onClick={() => setIsBulkModalOpen(true)}
                   className="bg-white text-indigo-600 border-2 border-indigo-600 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 transition-all text-xs"
                 >
                   <Plus className="w-4 h-4" />
-                  Bulk Archival (EPUB)
+                  Upload EPUB Hàng Loạt
                 </button>
                 <button 
                   onClick={() => {
                     setFormData({
                       ...formData,
-                      site_id: selectedSite !== 'all' ? selectedSite : 'all'
+                      site_id: selectedSite !== 'all' ? selectedSite : 'bookbazaar'
                     });
                     setIsModalOpen(true);
                   }}
                   className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 text-xs"
                 >
                   <Plus className="w-4 h-4" />
-                  Add New Book
+                  Thêm Sách Mới
                 </button>
               </div>
             </div>
@@ -713,7 +685,7 @@ export default function BookManagePage() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input 
                     type="text" 
-                    placeholder="Search title or author..."
+                    placeholder="Tìm tên sách hoặc tác giả..."
                     className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white font-medium"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
@@ -730,7 +702,7 @@ export default function BookManagePage() {
                       onChange={(e) => setSelectedAuthor(e.target.value)}
                       className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer max-w-[140px] truncate"
                     >
-                      <option value="">All Authors ({uniqueAuthors.length})</option>
+                      <option value="">Tất cả tác giả ({uniqueAuthors.length})</option>
                       {uniqueAuthors.map(author => (
                         <option key={author} value={author}>{author}</option>
                       ))}
@@ -745,7 +717,7 @@ export default function BookManagePage() {
                       onChange={(e) => setSelectedCategory(e.target.value)}
                       className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer"
                     >
-                      <option value="">All Categories ({uniqueCategories.length})</option>
+                      <option value="">Tất cả thể loại ({uniqueCategories.length})</option>
                       {uniqueCategories.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
                       ))}
@@ -760,12 +732,12 @@ export default function BookManagePage() {
                       onChange={(e) => setSelectedPriceFilter(e.target.value)}
                       className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer"
                     >
-                      <option value="">All Price Ranges</option>
-                      <option value="under5">Under $5.00</option>
+                      <option value="">Tất cả mức giá</option>
+                      <option value="under5">Dưới $5.00</option>
                       <option value="5to10">$5.00 - $10.00</option>
-                      <option value="over10">Over $10.00</option>
-                      <option value="priceAsc">Price: Low to High</option>
-                      <option value="priceDesc">Price: High to Low</option>
+                      <option value="over10">Trên $10.00</option>
+                      <option value="priceAsc">Giá: Thấp đến Cao</option>
+                      <option value="priceDesc">Giá: Cao đến Thấp</option>
                     </select>
                   </div>
 
@@ -777,13 +749,13 @@ export default function BookManagePage() {
                       title="Clear Filters"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Clear Filters
+                      Xóa Bộ Lọc
                     </button>
                   )}
                 </div>
 
                 <div className="text-xs text-slate-500 font-medium whitespace-nowrap">
-                  Showing {filteredBooks.length} / {books.length} books
+                  Hiển thị {filteredBooks.length} / {books.length} cuốn sách
                 </div>
               </div>
             </div>
@@ -802,12 +774,12 @@ export default function BookManagePage() {
                           className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                         />
                       </th>
-                      <th className="px-6 py-4">Book Details</th>
-                      <th className="px-6 py-4">Storefront</th>
-                      <th className="px-6 py-4">Category</th>
-                      <th className="px-6 py-4">Price</th>
+                      <th className="px-6 py-4">Chi tiết sách</th>
+                      <th className="px-6 py-4">Website</th>
+                      <th className="px-6 py-4">Thể loại</th>
+                      <th className="px-6 py-4">Giá bán</th>
                       <th className="px-6 py-4">Files</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th className="px-6 py-4 text-right">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -815,23 +787,23 @@ export default function BookManagePage() {
                       <tr>
                         <td colSpan={7} className="py-20 text-center">
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
-                          <span className="text-slate-400">Loading collection for {selectedSite === 'all' ? 'All Stores' : currentStorefront?.name}...</span>
+                          <span className="text-slate-400">Đang tải danh sách sách của {selectedSite === 'all' ? 'tất cả website' : currentStorefront?.name}...</span>
                         </td>
                       </tr>
                     ) : filteredBooks.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="py-20 text-center space-y-3">
                           <BookIcon className="w-10 h-10 text-slate-300 mx-auto" />
-                          <p className="text-slate-500 font-bold">No books found for this storefront.</p>
+                          <p className="text-slate-500 font-bold">Chưa có cuốn sách nào trên website này.</p>
                           <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                            Click "+ Add New Book" or "Bulk Archival" to upload and assign books specifically to this bookstore!
+                            Bấm "+ Thêm Sách Mới" hoặc "Upload EPUB Hàng Loạt" để đăng tải sách cho {currentStorefront?.name || 'website này'}!
                           </p>
                           {isAnyFilterActive && (
                             <button 
                               onClick={clearFilters}
                               className="mt-2 text-xs text-indigo-600 font-bold hover:underline"
                             >
-                              Clear All Filters
+                              Xóa toàn bộ bộ lọc
                             </button>
                           )}
                         </td>
@@ -839,7 +811,7 @@ export default function BookManagePage() {
                     ) : (
                       filteredBooks.map((book) => {
                         const isSelected = selectedBookIds.includes(book.id);
-                        const bookSite = STOREFRONTS.find(s => s.id === (book.site_id || 'all'));
+                        const bookSite = STOREFRONTS.find(s => s.id === (book.site_id || 'bookbazaar'));
 
                         return (
                           <tr 
@@ -878,7 +850,7 @@ export default function BookManagePage() {
                                 </span>
                               ) : (
                                 <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
-                                  🌐 All Stores
+                                  🌐 Chung
                                 </span>
                               )}
                             </td>
@@ -935,108 +907,60 @@ export default function BookManagePage() {
           /* STRIPE CONFIGURATION TAB */
           <div className="space-y-8">
             
-            {/* Banner */}
+            {/* Active Stripe Gateway Banner for Selected Site */}
             <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
                 <div className="space-y-2">
                   <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/20 text-emerald-300 text-xs font-bold rounded-full border border-emerald-500/30">
-                    <Zap className="w-3.5 h-3.5" /> 10 Storefront Multi-Stripe Gateway Router
+                    <Zap className="w-3.5 h-3.5" /> Cổng Thanh Toán Stripe Riêng
                   </div>
-                  <h2 className="text-xl sm:text-2xl font-bold">Isolated Stripe Payment Gateways</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold">
+                    Cấu hình Stripe cho {selectedSite === 'all' ? 'Tất cả các website' : currentStorefront?.name}
+                  </h2>
                   <p className="text-slate-300 text-xs sm:text-sm max-w-2xl">
-                    Each of your 10 bookstore websites has its own dedicated Stripe account! Customers checking out on any site will pay directly to that specific store's Stripe gateway.
+                    Mỗi trang web có thể cấu hình tài khoản Stripe riêng để nhận tiền trực tiếp. Khách hàng thanh toán trên website nào sẽ vào đúng tài khoản Stripe của website đó.
                   </p>
                 </div>
                 <button 
-                  onClick={() => handleStartAddStripeSetting()}
+                  onClick={handleStartAddStripeSetting}
                   className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-6 py-3 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-500/30 transition-all text-xs sm:text-sm whitespace-nowrap"
                 >
                   <Plus className="w-4 h-4" />
-                  Add Stripe Gateway
+                  Thêm Cổng Stripe Mới
                 </button>
               </div>
-            </div>
 
-            {/* 10 Storefronts Stripe Overview Grid */}
-            <div>
-              <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <Globe className="w-4 h-4 text-indigo-600" />
-                Storefront Payment Gateways Status (10 Sites)
-              </h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {STOREFRONTS.map((site) => {
-                  const siteSettings = stripeBySite[site.id] || [];
-                  const activeSetting = siteSettings.find(s => s.is_active);
-
-                  return (
-                    <div 
-                      key={site.id} 
-                      className={`bg-white rounded-2xl p-5 border transition-all ${
-                        activeSetting ? 'border-emerald-200 shadow-sm' : 'border-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: site.themeColor }} />
-                            <h4 className="font-bold text-slate-800 text-base">{site.name}</h4>
-                          </div>
-                          <span className="text-[11px] text-slate-400 font-mono">{site.domain}</span>
-                        </div>
-
-                        {activeSetting ? (
-                          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black rounded-full uppercase flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold rounded-full">
-                            Using Default .env
-                          </span>
-                        )}
-                      </div>
-
-                      {activeSetting ? (
-                        <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
-                          <div className="flex justify-between text-slate-600">
-                            <span>Account:</span>
-                            <span className="font-bold text-slate-800">{activeSetting.account_name}</span>
-                          </div>
-                          <div className="flex justify-between text-slate-500 font-mono text-[11px]">
-                            <span>Key:</span>
-                            <span>{activeSetting.secret_key.slice(0, 8)}••••••••</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs text-slate-500">
-                          No dedicated Stripe account configured yet for this site.
-                        </div>
-                      )}
-
-                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
-                        <span className="text-[11px] text-slate-400">
-                          {siteSettings.length} {siteSettings.length === 1 ? 'account' : 'accounts'} saved
-                        </span>
-                        <button
-                          onClick={() => handleStartAddStripeSetting(site.id)}
-                          className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
-                        >
-                          <span>Configure</span>
-                          <ChevronRight className="w-3.5 h-3.5" />
-                        </button>
+              {activeStripeSettingForSite ? (
+                <div className="mt-6 pt-5 border-t border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white/5 p-4 rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 flex-shrink-0">
+                      <ShieldCheck className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Cổng nhận tiền đang kích hoạt:</div>
+                      <div className="text-base sm:text-lg font-bold text-emerald-300 flex items-center gap-2">
+                        {activeStripeSettingForSite.account_name}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                  <div className="text-xs text-slate-300 font-mono bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
+                    Secret Key: {activeStripeSettingForSite.secret_key.slice(0, 10)}••••••••
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 pt-5 border-t border-white/10 text-xs text-amber-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  Chưa có tài khoản Stripe riêng được kích hoạt cho website này. Hệ thống đang nhận qua tài khoản mặc định (.env).
+                </div>
+              )}
             </div>
 
-            {/* All Configured Accounts Table */}
+            {/* Accounts Table for Current Site */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                 <h3 className="font-bold text-slate-800 flex items-center gap-2 text-base">
                   <CreditCard className="w-5 h-5 text-indigo-600" />
-                  All Saved Stripe Accounts ({stripeSettings.length})
+                  Danh Sách Tài Khoản Stripe ({currentSiteStripeSettings.length})
                 </h3>
               </div>
 
@@ -1044,12 +968,12 @@ export default function BookManagePage() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-bold border-b border-slate-100">
-                      <th className="px-6 py-4">Target Storefront</th>
-                      <th className="px-6 py-4">Account Name</th>
+                      <th className="px-6 py-4">Website Áp Dụng</th>
+                      <th className="px-6 py-4">Tên Tài Khoản</th>
                       <th className="px-6 py-4">Publishable Key</th>
                       <th className="px-6 py-4">Secret Key</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th className="px-6 py-4">Trạng Thái</th>
+                      <th className="px-6 py-4 text-right">Thao Tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1057,22 +981,22 @@ export default function BookManagePage() {
                       <tr>
                         <td colSpan={6} className="py-16 text-center">
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
-                          <span className="text-slate-400">Loading Stripe configurations...</span>
+                          <span className="text-slate-400">Đang tải danh sách Stripe...</span>
                         </td>
                       </tr>
-                    ) : stripeSettings.length === 0 ? (
+                    ) : currentSiteStripeSettings.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="py-16 text-center">
                           <CreditCard className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                          <p className="text-slate-500 font-bold">No custom Stripe accounts configured yet.</p>
+                          <p className="text-slate-500 font-bold">Chưa có tài khoản Stripe nào cho website này.</p>
                           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                            Click "+ Add Stripe Gateway" above to assign dedicated Stripe keys to each website!
+                            Bấm "+ Thêm Cổng Stripe Mới" ở trên để nhập Publishable & Secret key của website {currentStorefront?.name || 'này'}!
                           </p>
                         </td>
                       </tr>
                     ) : (
-                      stripeSettings.map((setting) => {
-                        const targetSite = STOREFRONTS.find(s => s.id === (setting.site_id || 'all'));
+                      currentSiteStripeSettings.map((setting) => {
+                        const targetSite = STOREFRONTS.find(s => s.id === (setting.site_id || 'bookbazaar'));
 
                         return (
                           <tr key={setting.id} className={`hover:bg-slate-50/60 transition-colors ${setting.is_active ? 'bg-emerald-50/30' : ''}`}>
@@ -1083,7 +1007,7 @@ export default function BookManagePage() {
                                 </span>
                               ) : (
                                 <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
-                                  🌐 All Stores (Global)
+                                  🌐 Chung (Tất cả)
                                 </span>
                               )}
                             </td>
@@ -1092,7 +1016,7 @@ export default function BookManagePage() {
                                 {setting.account_name}
                                 {setting.is_active && (
                                   <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
-                                    ACTIVE
+                                    ĐANG DÙNG
                                   </span>
                                 )}
                               </div>
@@ -1110,10 +1034,10 @@ export default function BookManagePage() {
                             <td className="px-6 py-4">
                               {setting.is_active ? (
                                 <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600">
-                                  <CheckCircle2 className="w-4 h-4" /> Active Destination
+                                  <CheckCircle2 className="w-4 h-4" /> Đang nhận thanh toán
                                 </span>
                               ) : (
-                                <span className="text-xs font-medium text-slate-400">Inactive</span>
+                                <span className="text-xs font-medium text-slate-400">Tắt</span>
                               )}
                             </td>
                             <td className="px-6 py-4 text-right">
@@ -1123,7 +1047,7 @@ export default function BookManagePage() {
                                     onClick={() => handleActivateStripeSetting(setting.id)}
                                     className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 border border-indigo-200"
                                   >
-                                    <Check className="w-3.5 h-3.5" /> Activate
+                                    <Check className="w-3.5 h-3.5" /> Kích Hoạt
                                   </button>
                                 )}
                                 <button 
@@ -1161,7 +1085,7 @@ export default function BookManagePage() {
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <CreditCard className="w-6 h-6 text-indigo-600" />
-                {editingStripeSetting ? "Edit Stripe Account" : "Add Storefront Stripe Gateway"}
+                {editingStripeSetting ? "Sửa Tài Khoản Stripe" : "Thêm Cổng Stripe Mới"}
               </h2>
               <button onClick={() => setIsStripeModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
@@ -1170,7 +1094,7 @@ export default function BookManagePage() {
 
             <form onSubmit={handleAddStripeSettingSubmit} className="p-8 space-y-5">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Bookstore Storefront</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Website Áp Dụng Cổng Stripe Này</label>
                 <select
                   required
                   value={stripeFormData.site_id}
@@ -1185,21 +1109,21 @@ export default function BookManagePage() {
                   }}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm font-semibold bg-white"
                 >
-                  <option value="all">🌐 All Storefronts (Global Fallback)</option>
                   {STOREFRONTS.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.domain})
                     </option>
                   ))}
+                  <option value="all">🌐 Dùng Chung Cho Tất Cả Website (Fallback)</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Account Label / Nickname</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Tên Gợi Nhớ (Account Label)</label>
                 <input 
                   required
                   type="text" 
-                  placeholder="e.g. PickTomes Official Stripe Gateway"
+                  placeholder="Ví dụ: BookBazaar Main Stripe Account"
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm"
                   value={stripeFormData.account_name}
                   onChange={(e) => setStripeFormData({...stripeFormData, account_name: e.target.value})}
@@ -1207,10 +1131,10 @@ export default function BookManagePage() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Publishable Key (pk_live_... or pk_test_...)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Publishable Key (pk_live_... hoặc pk_test_...)</label>
                 <input 
                   type="text" 
-                  placeholder="pk_live_51U0CrfRMPnMtVmqSBawUCkd..."
+                  placeholder="pk_live_..."
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
                   value={stripeFormData.publishable_key}
                   onChange={(e) => setStripeFormData({...stripeFormData, publishable_key: e.target.value})}
@@ -1218,16 +1142,16 @@ export default function BookManagePage() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Secret Key (sk_live_... or sk_test_...)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Secret Key (sk_live_... hoặc sk_test_...)</label>
                 <input 
                   required
                   type="password" 
-                  placeholder="sk_live_... or sk_test_..."
+                  placeholder="sk_live_... hoặc sk_test_..."
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
                   value={stripeFormData.secret_key}
                   onChange={(e) => setStripeFormData({...stripeFormData, secret_key: e.target.value})}
                 />
-                <p className="text-[11px] text-slate-400 mt-1">Secret Key is used securely on the backend to create checkout sessions.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Secret Key được sử dụng an toàn trên máy chủ backend để tạo phiên thanh toán.</p>
               </div>
 
               <div className="flex items-center gap-3 pt-2">
@@ -1239,7 +1163,7 @@ export default function BookManagePage() {
                   className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
                 <label htmlFor="is_active_checkbox" className="text-xs font-bold text-slate-700 cursor-pointer">
-                  Set as active receiving gateway for this storefront immediately
+                  Kích hoạt cổng này làm cổng nhận tiền chính của website ngay lập tức
                 </label>
               </div>
 
@@ -1249,7 +1173,7 @@ export default function BookManagePage() {
                   onClick={() => setIsStripeModalOpen(false)}
                   className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
-                  Cancel
+                  Hủy
                 </button>
                 <button 
                   disabled={isSubmitting}
@@ -1257,7 +1181,7 @@ export default function BookManagePage() {
                   className="flex-2 px-8 py-3.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Save Stripe Gateway
+                  Lưu Cổng Stripe
                 </button>
               </div>
             </form>
@@ -1270,39 +1194,27 @@ export default function BookManagePage() {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                <Plus className="w-6 h-6 text-indigo-600" />
-                Bulk Archive Library (EPUB Batch)
-              </h2>
+              <div>
+                <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <Plus className="w-6 h-6 text-indigo-600" />
+                  Upload EPUB Hàng Loạt
+                </h2>
+                <p className="text-xs text-indigo-600 font-bold mt-1">
+                  Website đích: {selectedSite === 'all' ? 'BookBazaar (Mặc định)' : currentStorefront?.name}
+                </p>
+              </div>
               <button onClick={() => setIsBulkModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="p-8 space-y-6">
-              {/* Target Storefront Selector */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Storefront Destination</label>
-                <select 
-                  value={bulkSite}
-                  onChange={(e) => setBulkSite(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs font-bold rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white text-indigo-900"
-                >
-                  <option value="all">🌐 All Storefronts (Shared across all 10 sites)</option>
-                  {STOREFRONTS.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.domain})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               {/* Batch Metadata Settings */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Batch Metadata Settings</h3>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Thông tin mặc định đính kèm</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Author Name</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Tác giả</label>
                     <input 
                       type="text" 
                       placeholder="e.g. Martin Chavez"
@@ -1312,7 +1224,7 @@ export default function BookManagePage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Thể loại</label>
                     <select 
                       value={bulkCategory}
                       onChange={(e) => setBulkCategory(e.target.value)}
@@ -1326,7 +1238,7 @@ export default function BookManagePage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Price</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Giá bán</label>
                     <input 
                       type="text" 
                       placeholder="$12.00"
@@ -1340,7 +1252,7 @@ export default function BookManagePage() {
 
               <div className="grid grid-cols-2 gap-6">
                 <div className="space-y-3">
-                  <label className="block text-xs font-bold text-slate-700">1. Select EPUB/PDF Files ({bulkBookFiles.length})</label>
+                  <label className="block text-xs font-bold text-slate-700">1. Chọn các file EPUB/PDF ({bulkBookFiles.length})</label>
                   <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-400 transition-colors relative bg-white">
                     <input 
                       type="file" 
@@ -1350,8 +1262,8 @@ export default function BookManagePage() {
                       className="absolute inset-0 opacity-0 cursor-pointer"
                     />
                     <FileText className="w-7 h-7 text-indigo-500 mx-auto mb-1.5" />
-                    <p className="text-xs text-slate-600 font-bold">Drop EPUB/PDF Files</p>
-                    <p className="text-[10px] text-slate-400 mt-1">EPUB covers & descriptions auto-extracted!</p>
+                    <p className="text-xs text-slate-600 font-bold">Kéo thả file EPUB vào đây</p>
+                    <p className="text-[10px] text-slate-400 mt-1">Ảnh bìa & mô tả sẽ được tự động trích xuất!</p>
                   </div>
                   <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
                     {bulkBookFiles.map((f, idx) => {
@@ -1379,7 +1291,7 @@ export default function BookManagePage() {
                 </div>
 
                 <div className="space-y-3">
-                  <label className="block text-xs font-bold text-slate-700">2. Optional Manual Covers ({bulkCoverFiles.length})</label>
+                  <label className="block text-xs font-bold text-slate-700">2. Ảnh bìa thủ công ngoài (Tùy chọn) ({bulkCoverFiles.length})</label>
                   <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-400 transition-colors relative bg-white">
                     <input 
                       type="file" 
@@ -1389,8 +1301,8 @@ export default function BookManagePage() {
                       className="absolute inset-0 opacity-0 cursor-pointer"
                     />
                     <ImageIcon className="w-7 h-7 text-slate-300 mx-auto mb-1.5" />
-                    <p className="text-xs text-slate-400 font-medium">Drop External Covers</p>
-                    <p className="text-[10px] text-slate-400 mt-1">Leaves empty if using built-in EPUB covers</p>
+                    <p className="text-xs text-slate-400 font-medium">Kéo thả ảnh bìa (nếu có)</p>
+                    <p className="text-[10px] text-slate-400 mt-1">Để trống nếu muốn dùng ảnh bìa sẵn có trong EPUB</p>
                   </div>
                   <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
                     {bulkCoverFiles.map((f, idx) => (
@@ -1411,12 +1323,12 @@ export default function BookManagePage() {
               {isSubmitting && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs font-bold text-indigo-600 uppercase tracking-widest">
-                    <span>Archiving in progress...</span>
+                    <span>Đang tải lên kho sách...</span>
                     <span>{bulkProgress.current} / {bulkProgress.total}</span>
                   </div>
                   <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
                     <div 
-                      className="bg-indigo-600 h-full transition-all duration-300"
+                      className="bg-indigo-600 h-full transition-all duration-300" 
                       style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
                     />
                   </div>
@@ -1428,7 +1340,7 @@ export default function BookManagePage() {
                   onClick={() => setIsBulkModalOpen(false)}
                   className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
-                  Cancel
+                  Hủy
                 </button>
                 <button 
                   disabled={isSubmitting || bulkBookFiles.length === 0}
@@ -1436,7 +1348,7 @@ export default function BookManagePage() {
                   className="flex-2 px-10 py-3.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Upload to Storefront
+                  Bắt Đầu Đăng Sách
                 </button>
               </div>
             </div>
@@ -1450,7 +1362,7 @@ export default function BookManagePage() {
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800">
-                {editingBook ? "Edit Book Details" : "Add New Book"}
+                {editingBook ? "Chỉnh Sửa Chi Tiết Sách" : "Thêm Cuốn Sách Mới"}
               </h2>
               <button onClick={resetForm} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
@@ -1462,23 +1374,23 @@ export default function BookManagePage() {
                 
                 {/* Storefront Selector */}
                 <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Target Storefront</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Website Đăng Sách</label>
                   <select 
                     value={formData.site_id}
                     onChange={(e) => setFormData({...formData, site_id: e.target.value})}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs font-bold text-indigo-900 bg-white"
                   >
-                    <option value="all">🌐 All Storefronts (Shared across all 10 sites)</option>
                     {STOREFRONTS.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name} ({s.domain})
                       </option>
                     ))}
+                    <option value="all">🌐 Dùng Chung Cho Tất Cả Website</option>
                   </select>
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Book Title</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Tựa Đề Sách (Title)</label>
                   <input 
                     required
                     type="text" 
@@ -1488,7 +1400,7 @@ export default function BookManagePage() {
                   />
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Author</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Tác Giả (Author)</label>
                   <input 
                     required
                     type="text" 
@@ -1498,14 +1410,14 @@ export default function BookManagePage() {
                   />
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Thể Loại (Category)</label>
                   <select 
                     required
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                     value={formData.category}
                     onChange={(e) => setFormData({...formData, category: e.target.value})}
                   >
-                    <option value="">Select Category</option>
+                    <option value="">Chọn Thể Loại</option>
                     <option value="Fiction">Fiction</option>
                     <option value="Non-Fiction">Non-Fiction</option>
                     <option value="Philosophy">Philosophy</option>
@@ -1514,7 +1426,7 @@ export default function BookManagePage() {
                   </select>
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Price (e.g. $14.99)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Giá Bán (Ví dụ: $14.99)</label>
                   <input 
                     required
                     type="text" 
@@ -1524,7 +1436,7 @@ export default function BookManagePage() {
                   />
                 </div>
                 <div className="col-span-1">
-                   <label className="block text-xs font-bold text-slate-700 mb-1">Pages</label>
+                   <label className="block text-xs font-bold text-slate-700 mb-1">Số Trang (Pages)</label>
                    <input 
                      type="text" 
                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
@@ -1533,10 +1445,10 @@ export default function BookManagePage() {
                    />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Description</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Mô Tả Giới Thiệu (Description)</label>
                   <textarea 
                     rows={4}
-                    placeholder="Full introduction & description..."
+                    placeholder="Mô tả chi tiết cuốn sách..."
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-y text-xs leading-relaxed"
                     value={formData.description}
                     onChange={(e) => setFormData({...formData, description: e.target.value})}
@@ -1547,7 +1459,7 @@ export default function BookManagePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5" /> Book File (PDF/EPUB)
+                    <FileText className="w-3.5 h-3.5" /> File Sách (PDF/EPUB)
                   </label>
                   <input 
                     type="file" 
@@ -1558,7 +1470,7 @@ export default function BookManagePage() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5" /> Cover Image
+                    <ImageIcon className="w-3.5 h-3.5" /> Ảnh Bìa (Cover)
                   </label>
                   <input 
                     type="file" 
@@ -1575,7 +1487,7 @@ export default function BookManagePage() {
                   onClick={resetForm}
                   className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
-                  Cancel
+                  Hủy
                 </button>
                 <button 
                   disabled={isSubmitting}
@@ -1583,7 +1495,7 @@ export default function BookManagePage() {
                   className="flex-2 px-10 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {editingBook ? "Save Changes" : "Archive Book"}
+                  {editingBook ? "Lưu Thay Đổi" : "Lưu Sách Mới"}
                 </button>
               </div>
             </form>
@@ -1598,7 +1510,7 @@ export default function BookManagePage() {
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <Dices className="w-6 h-6 text-emerald-600" />
-                Bulk Randomize Book Prices
+                Random Giá Sách Cho {selectedSite === 'all' ? 'Tất cả website' : currentStorefront?.name}
               </h2>
               <button 
                 onClick={() => setIsRandomPriceModalOpen(false)} 
@@ -1611,10 +1523,10 @@ export default function BookManagePage() {
             <form onSubmit={handleBulkRandomizePricesSubmit} className="p-8 space-y-5">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Target Price Pool (One price per line)
+                  Danh Sách Mức Giá Mục Tiêu (Mỗi dòng một mức giá)
                 </label>
                 <p className="text-[11px] text-slate-500 mb-2">
-                  Enter prices separated by ENTER. Every target book will be assigned a randomly chosen price from this list!
+                  Nhập các mức giá ngăn cách bằng Enter. Hệ thống sẽ bốc ngẫu nhiên một giá từ danh sách này để gán cho từng cuốn sách!
                 </p>
                 <textarea
                   required
@@ -1626,12 +1538,12 @@ export default function BookManagePage() {
                 />
                 <div className="mt-1.5 text-xs font-bold text-emerald-600 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5" />
-                  {randomPriceInput.split('\n').filter(l => l.trim().length > 0).length} prices in pool
+                  {randomPriceInput.split('\n').filter(l => l.trim().length > 0).length} mức giá trong kho
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Apply To:</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Áp Dụng Cho:</label>
                 <div className="grid grid-cols-2 gap-3">
                   <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
                     randomPriceTarget === 'all' ? 'border-emerald-500 bg-emerald-50/40 text-emerald-900 font-bold' : 'border-slate-200 text-slate-600'
@@ -1643,7 +1555,7 @@ export default function BookManagePage() {
                       onChange={() => setRandomPriceTarget('all')}
                       className="w-4 h-4 text-emerald-600"
                     />
-                    <span className="text-xs">Current View ({books.length} items)</span>
+                    <span className="text-xs">Tất cả sách ({books.length} cuốn)</span>
                   </label>
 
                   <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
@@ -1658,7 +1570,7 @@ export default function BookManagePage() {
                       onChange={() => setRandomPriceTarget('selected')}
                       className="w-4 h-4 text-emerald-600"
                     />
-                    <span className="text-xs">Selected Books ({selectedBookIds.length} items)</span>
+                    <span className="text-xs">Sách đã chọn ({selectedBookIds.length} cuốn)</span>
                   </label>
                 </div>
               </div>
@@ -1666,7 +1578,7 @@ export default function BookManagePage() {
               {randomPriceProgress.total > 0 && (
                 <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 space-y-1.5">
                   <div className="flex justify-between text-xs font-bold text-emerald-800">
-                    <span>Randomizing prices...</span>
+                    <span>Đang cập nhật giá...</span>
                     <span>{randomPriceProgress.current} / {randomPriceProgress.total}</span>
                   </div>
                   <div className="w-full bg-emerald-200 rounded-full h-2 overflow-hidden">
@@ -1684,7 +1596,7 @@ export default function BookManagePage() {
                   onClick={() => setIsRandomPriceModalOpen(false)}
                   className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
-                  Cancel
+                  Hủy
                 </button>
                 <button 
                   disabled={isSubmitting}
@@ -1694,12 +1606,12 @@ export default function BookManagePage() {
                   {isSubmitting ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Applying Prices...</span>
+                      <span>Đang Gán Giá...</span>
                     </>
                   ) : (
                     <>
                       <Dices className="w-4 h-4" />
-                      <span>Apply Random Prices</span>
+                      <span>Gán Giá Ngẫu Nhiên</span>
                     </>
                   )}
                 </button>
@@ -1711,6 +1623,3 @@ export default function BookManagePage() {
     </div>
   );
 }
-
-
-
