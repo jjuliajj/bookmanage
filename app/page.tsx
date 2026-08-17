@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { 
   Plus, 
   Search, 
@@ -23,7 +23,13 @@ import {
   Check,
   DollarSign,
   Sparkles,
-  Dices
+  Dices,
+  Globe,
+  Layers,
+  Store,
+  ChevronRight,
+  RefreshCw,
+  AlertCircle
 } from "lucide-react";
 import { 
   getBooks, 
@@ -38,12 +44,15 @@ import {
   updateStripeSetting,
   activateStripeSetting,
   deleteStripeSetting,
-  StripeSetting
+  StripeSetting,
+  STOREFRONTS,
+  StorefrontSite
 } from "@/lib/api";
 import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
 export default function BookManagePage() {
   const [activeTab, setActiveTab] = useState<'books' | 'stripe'>('books');
+  const [selectedSite, setSelectedSite] = useState<string>('all');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -63,6 +72,7 @@ export default function BookManagePage() {
   const [isStripeModalOpen, setIsStripeModalOpen] = useState(false);
   const [editingStripeSetting, setEditingStripeSetting] = useState<StripeSetting | null>(null);
   const [stripeFormData, setStripeFormData] = useState({
+    site_id: "all",
     account_name: "",
     publishable_key: "",
     secret_key: "",
@@ -77,6 +87,7 @@ export default function BookManagePage() {
 
   // Form states
   const [formData, setFormData] = useState({
+    site_id: "all",
     title: "",
     author: "",
     description: "",
@@ -90,6 +101,7 @@ export default function BookManagePage() {
 
   // Bulk upload states
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkSite, setBulkSite] = useState("all");
   const [bulkBookFiles, setBulkBookFiles] = useState<File[]>([]);
   const [bulkCoverFiles, setBulkCoverFiles] = useState<File[]>([]);
   const [bulkAuthor, setBulkAuthor] = useState("Martin Chavez");
@@ -100,12 +112,14 @@ export default function BookManagePage() {
   useEffect(() => {
     fetchBooks();
     fetchStripeSettings();
-  }, []);
+  }, [selectedSite]);
 
   const fetchBooks = async () => {
+    setLoading(true);
     try {
-      const response = await getBooks();
+      const response = await getBooks(selectedSite);
       setBooks(response.data);
+      setSelectedBookIds([]);
     } catch (error) {
       console.error("Failed to fetch books:", error);
     } finally {
@@ -124,6 +138,23 @@ export default function BookManagePage() {
       setStripeLoading(false);
     }
   };
+
+  const currentStorefront = STOREFRONTS.find(s => s.id === selectedSite);
+
+  // Live count of books per storefront
+  const bookCountBySite = useMemo(() => {
+    const counts: Record<string, number> = { all: books.length };
+    STOREFRONTS.forEach(s => { counts[s.id] = 0; });
+    books.forEach(b => {
+      const site = b.site_id || 'all';
+      if (site === 'all') {
+        STOREFRONTS.forEach(s => { counts[s.id] = (counts[s.id] || 0) + 1; });
+      } else if (counts[site] !== undefined) {
+        counts[site] = (counts[site] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [books]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this book?")) return;
@@ -171,16 +202,17 @@ export default function BookManagePage() {
 
   const handleDeleteAll = async () => {
     if (books.length === 0) return;
-    if (!confirm("WARNING: Are you sure you want to delete ALL books in the collection? This cannot be undone!")) return;
+    const siteLabel = selectedSite === 'all' ? 'ALL books across all stores' : `ALL books for ${currentStorefront?.name || selectedSite}`;
+    if (!confirm(`WARNING: Are you sure you want to delete ${siteLabel}? This cannot be undone!`)) return;
 
     try {
       setIsSubmitting(true);
-      await deleteAllBooks();
-      setBooks([]);
+      await deleteAllBooks(selectedSite);
+      await fetchBooks();
       setSelectedBookIds([]);
     } catch (error) {
       console.error("Delete all failed:", error);
-      alert("Failed to delete all books.");
+      alert("Failed to delete books.");
     } finally {
       setIsSubmitting(false);
     }
@@ -193,15 +225,24 @@ export default function BookManagePage() {
     setSelectedPriceFilter("");
   };
 
-  const handleStartAddStripeSetting = () => {
+  const handleStartAddStripeSetting = (targetSiteId?: string) => {
     setEditingStripeSetting(null);
-    setStripeFormData({ account_name: "", publishable_key: "", secret_key: "", is_active: true });
+    const defaultSite = targetSiteId || (selectedSite !== 'all' ? selectedSite : 'bookbazaar');
+    const siteObj = STOREFRONTS.find(s => s.id === defaultSite);
+    setStripeFormData({ 
+      site_id: defaultSite,
+      account_name: siteObj ? `${siteObj.name} Primary Gateway` : "Main Stripe Account",
+      publishable_key: "", 
+      secret_key: "", 
+      is_active: true 
+    });
     setIsStripeModalOpen(true);
   };
 
   const handleStartEditStripeSetting = (setting: StripeSetting) => {
     setEditingStripeSetting(setting);
     setStripeFormData({
+      site_id: setting.site_id || "all",
       account_name: setting.account_name,
       publishable_key: setting.publishable_key || "",
       secret_key: setting.secret_key || "",
@@ -226,7 +267,6 @@ export default function BookManagePage() {
       await fetchStripeSettings();
       setIsStripeModalOpen(false);
       setEditingStripeSetting(null);
-      setStripeFormData({ account_name: "", publishable_key: "", secret_key: "", is_active: true });
     } catch (error: any) {
       console.error("Failed to save Stripe account:", error);
       alert(error.response?.data?.error || "Failed to save Stripe account configuration.");
@@ -238,7 +278,6 @@ export default function BookManagePage() {
   const handleBulkRandomizePricesSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Parse prices from multiline text input
     const rawLines = randomPriceInput.split('\n');
     const prices = rawLines
       .map(line => line.trim().replace(/[^0-9.]/g, ''))
@@ -270,10 +309,10 @@ export default function BookManagePage() {
       for (let i = 0; i < targetBooks.length; i++) {
         setRandomPriceProgress({ current: i + 1, total: targetBooks.length });
         const book = targetBooks[i];
-        // Pick a random price from the parsed prices array
         const randomPrice = prices[Math.floor(Math.random() * prices.length)];
 
         await updateBook(book.id, {
+          site_id: book.site_id || selectedSite || 'all',
           title: book.title,
           author: book.author,
           category: book.category,
@@ -315,6 +354,7 @@ export default function BookManagePage() {
   const handleEdit = (book: Book) => {
     setEditingBook(book);
     setFormData({
+      site_id: book.site_id || "all",
       title: book.title,
       author: book.author,
       description: cleanExtractedDescription(book.description || ""),
@@ -328,6 +368,7 @@ export default function BookManagePage() {
 
   const resetForm = () => {
     setFormData({
+      site_id: selectedSite !== 'all' ? selectedSite : 'all',
       title: "",
       author: "",
       description: "",
@@ -348,6 +389,7 @@ export default function BookManagePage() {
 
     try {
       const data = new FormData();
+      data.append("site_id", formData.site_id || (selectedSite !== 'all' ? selectedSite : 'all'));
       data.append("title", formData.title);
       data.append("author", formData.author);
       data.append("description", formData.description);
@@ -378,6 +420,8 @@ export default function BookManagePage() {
     if (bulkBookFiles.length === 0) return;
     setIsSubmitting(true);
     setBulkProgress({ current: 0, total: bulkBookFiles.length });
+
+    const targetSiteId = bulkSite || (selectedSite !== 'all' ? selectedSite : 'all');
 
     try {
       for (let i = 0; i < bulkBookFiles.length; i++) {
@@ -412,6 +456,7 @@ export default function BookManagePage() {
         const finalCover = manualCover || extractedCoverFile;
 
         const data = new FormData();
+        data.append("site_id", targetSiteId);
         data.append("title", title);
         data.append("author", author);
         data.append("description", description);
@@ -428,7 +473,7 @@ export default function BookManagePage() {
       setBulkBookFiles([]);
       setBulkCoverFiles([]);
       setIsBulkModalOpen(false);
-      alert(`Successfully archived ${bulkBookFiles.length} books!`);
+      alert(`Successfully archived ${bulkBookFiles.length} books for ${targetSiteId.toUpperCase()}!`);
     } catch (error) {
       console.error("Bulk upload failed:", error);
       alert("Bulk upload failed at index " + bulkProgress.current);
@@ -449,9 +494,9 @@ export default function BookManagePage() {
 
     const matchesAuthor = !selectedAuthor || book.author === selectedAuthor;
     const matchesCategory = !selectedCategory || book.category === selectedCategory;
-
+    
     let matchesPrice = true;
-    const numericPrice = parseFloat((book.price || "").replace(/[^0-9.]/g, "")) || 0;
+    const numericPrice = parseFloat((book.price || "0").replace(/[^0-9.]/g, "")) || 0;
     if (selectedPriceFilter === "under5") {
       matchesPrice = numericPrice < 5;
     } else if (selectedPriceFilter === "5to10") {
@@ -477,60 +522,137 @@ export default function BookManagePage() {
 
   const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
   const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
-  const activeStripeSetting = stripeSettings.find(s => s.is_active);
+
+  // Group stripe settings by site
+  const stripeBySite = useMemo(() => {
+    const map: Record<string, StripeSetting[]> = {};
+    stripeSettings.forEach(s => {
+      const site = s.site_id || 'all';
+      if (!map[site]) map[site] = [];
+      map[site].push(s);
+    });
+    return map;
+  }, [stripeSettings]);
 
   return (
-    <div className="min-h-screen bg-slate-50 p-8 font-sans text-slate-900">
-      <div className="max-w-7xl mx-auto">
-        {/* Navigation Tabs Header */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans text-slate-900">
+      <div className="max-w-7xl mx-auto space-y-6">
+        
+        {/* Top Header */}
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
           <div>
-            <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
-              <BookIcon className="w-8 h-8 text-indigo-600" />
-              Bookpatr Management
-            </h1>
-            <p className="text-slate-500 mt-1">Manage your literary collection, archival files, and Stripe payment accounts.</p>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-200">
+                <Store className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                  Bookpatr Multi-Storefront Engine
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-500 font-medium">
+                  Unified control dashboard managing 10 bookstore storefronts & isolated Stripe gateways.
+                </p>
+              </div>
+            </div>
           </div>
 
-          <div className="flex bg-slate-200/70 p-1.5 rounded-2xl border border-slate-300/50">
+          <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 w-full md:w-auto">
             <button 
               onClick={() => setActiveTab('books')}
-              className={`px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${
+              className={`flex-1 md:flex-none px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
                 activeTab === 'books'
-                  ? 'bg-white text-indigo-600 shadow-md shadow-slate-200'
+                  ? 'bg-white text-indigo-600 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <BookIcon className="w-4 h-4" />
-              Book Collection ({books.length})
+              Book Management ({books.length})
             </button>
             <button 
               onClick={() => setActiveTab('stripe')}
-              className={`px-5 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all ${
+              className={`flex-1 md:flex-none px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
                 activeTab === 'stripe'
-                  ? 'bg-white text-indigo-600 shadow-md shadow-slate-200'
+                  ? 'bg-white text-indigo-600 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <CreditCard className="w-4 h-4" />
-              Stripe Accounts ({stripeSettings.length})
-              {activeStripeSetting && (
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active Stripe Account configured" />
-              )}
+              Stripe Gateways ({stripeSettings.length})
             </button>
           </div>
         </header>
 
+        {/* Storefront Website Selector Bar */}
+        <section className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Globe className="w-4 h-4 text-indigo-500" /> Target Bookstore Storefront (10 Sites)
+            </span>
+            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
+              Active Scope: {selectedSite === 'all' ? 'All 10 Storefronts' : currentStorefront?.name}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            {/* All Stores Option */}
+            <button
+              onClick={() => setSelectedSite('all')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border ${
+                selectedSite === 'all'
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-sm scale-102'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>All 10 Websites</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                selectedSite === 'all' ? 'bg-slate-800 text-slate-200' : 'bg-slate-200 text-slate-600'
+              }`}>
+                {bookCountBySite.all || 0}
+              </span>
+            </button>
+
+            {/* Individual Storefront Pills */}
+            {STOREFRONTS.map((site) => {
+              const isSelected = selectedSite === site.id;
+              const hasActiveStripe = (stripeBySite[site.id] || []).some(s => s.is_active);
+
+              return (
+                <button
+                  key={site.id}
+                  onClick={() => setSelectedSite(site.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 border ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-200 scale-102'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: isSelected ? '#FFFFFF' : site.themeColor }} />
+                  <span>{site.name}</span>
+                  {hasActiveStripe && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Stripe Gateway Active" />
+                  )}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                    isSelected ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-600'
+                  }`}>
+                    {bookCountBySite[site.id] || 0}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {activeTab === 'books' ? (
           <>
             {/* Action Buttons Header Bar */}
-            <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
-              <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap justify-between items-center gap-4">
+              <div className="flex flex-wrap gap-2.5">
                 {selectedBookIds.length > 0 && (
                   <button 
                     onClick={handleDeleteSelected}
                     disabled={isSubmitting}
-                    className="bg-rose-50 text-rose-600 border border-rose-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-100 transition-all text-sm disabled:opacity-50"
+                    className="bg-rose-50 text-rose-600 border border-rose-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-100 transition-all text-xs disabled:opacity-50"
                   >
                     <Trash2 className="w-4 h-4" />
                     Delete Selected ({selectedBookIds.length})
@@ -541,7 +663,7 @@ export default function BookManagePage() {
                   <button 
                     onClick={handleDeleteAll}
                     disabled={isSubmitting}
-                    className="bg-red-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-red-700 transition-all text-sm shadow-md shadow-red-200 disabled:opacity-50"
+                    className="bg-red-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-red-700 transition-all text-xs shadow-sm shadow-red-200 disabled:opacity-50"
                   >
                     <Trash className="w-4 h-4" />
                     Delete All ({books.length})
@@ -549,25 +671,33 @@ export default function BookManagePage() {
                 )}
               </div>
 
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-2.5">
                 <button 
                   onClick={() => setIsRandomPriceModalOpen(true)}
-                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-100 transition-all text-sm"
-                  title="Randomize prices across books"
+                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-100 transition-all text-xs"
                 >
                   <Dices className="w-4 h-4 text-emerald-600" />
                   Randomize Prices
                 </button>
                 <button 
-                  onClick={() => setIsBulkModalOpen(true)}
-                  className="bg-white text-indigo-600 border-2 border-indigo-600 px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 transition-all text-sm"
+                  onClick={() => {
+                    setBulkSite(selectedSite !== 'all' ? selectedSite : 'bookbazaar');
+                    setIsBulkModalOpen(true);
+                  }}
+                  className="bg-white text-indigo-600 border-2 border-indigo-600 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 transition-all text-xs"
                 >
                   <Plus className="w-4 h-4" />
-                  Bulk Archival
+                  Bulk Archival (EPUB)
                 </button>
                 <button 
-                  onClick={() => setIsModalOpen(true)}
-                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 text-sm"
+                  onClick={() => {
+                    setFormData({
+                      ...formData,
+                      site_id: selectedSite !== 'all' ? selectedSite : 'all'
+                    });
+                    setIsModalOpen(true);
+                  }}
+                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 text-xs"
                 >
                   <Plus className="w-4 h-4" />
                   Add New Book
@@ -576,7 +706,7 @@ export default function BookManagePage() {
             </div>
 
             {/* Filters & Search Control Bar */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-4 bg-slate-50/70 border-b border-slate-100 flex flex-col lg:flex-row gap-3 justify-between items-center">
                 {/* Search Box */}
                 <div className="relative w-full lg:w-80">
@@ -584,7 +714,7 @@ export default function BookManagePage() {
                   <input 
                     type="text" 
                     placeholder="Search title or author..."
-                    className="w-full pl-9 pr-4 py-2 text-sm rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                    className="w-full pl-9 pr-4 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white font-medium"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -673,6 +803,7 @@ export default function BookManagePage() {
                         />
                       </th>
                       <th className="px-6 py-4">Book Details</th>
+                      <th className="px-6 py-4">Storefront</th>
                       <th className="px-6 py-4">Category</th>
                       <th className="px-6 py-4">Price</th>
                       <th className="px-6 py-4">Files</th>
@@ -682,19 +813,23 @@ export default function BookManagePage() {
                   <tbody className="divide-y divide-slate-100">
                     {loading ? (
                       <tr>
-                        <td colSpan={6} className="py-20 text-center">
+                        <td colSpan={7} className="py-20 text-center">
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
-                          <span className="text-slate-400">Loading your collection...</span>
+                          <span className="text-slate-400">Loading collection for {selectedSite === 'all' ? 'All Stores' : currentStorefront?.name}...</span>
                         </td>
                       </tr>
                     ) : filteredBooks.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-20 text-center">
-                          <p className="text-slate-400">No books found matching your criteria.</p>
+                        <td colSpan={7} className="py-20 text-center space-y-3">
+                          <BookIcon className="w-10 h-10 text-slate-300 mx-auto" />
+                          <p className="text-slate-500 font-bold">No books found for this storefront.</p>
+                          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                            Click "+ Add New Book" or "Bulk Archival" to upload and assign books specifically to this bookstore!
+                          </p>
                           {isAnyFilterActive && (
                             <button 
                               onClick={clearFilters}
-                              className="mt-3 text-xs text-indigo-600 font-bold hover:underline"
+                              className="mt-2 text-xs text-indigo-600 font-bold hover:underline"
                             >
                               Clear All Filters
                             </button>
@@ -704,6 +839,8 @@ export default function BookManagePage() {
                     ) : (
                       filteredBooks.map((book) => {
                         const isSelected = selectedBookIds.includes(book.id);
+                        const bookSite = STOREFRONTS.find(s => s.id === (book.site_id || 'all'));
+
                         return (
                           <tr 
                             key={book.id} 
@@ -729,17 +866,28 @@ export default function BookManagePage() {
                                   )}
                                 </div>
                                 <div>
-                                  <div className="font-bold text-slate-800">{book.title}</div>
-                                  <div className="text-sm text-slate-500">{book.author}</div>
+                                  <div className="font-bold text-slate-800 line-clamp-1">{book.title}</div>
+                                  <div className="text-xs text-slate-500">{book.author}</div>
                                 </div>
                               </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              {bookSite ? (
+                                <span className={`px-2.5 py-1 text-[10px] font-extrabold rounded-md border ${bookSite.badgeBg} ${bookSite.badgeText}`}>
+                                  {bookSite.name}
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
+                                  🌐 All Stores
+                                </span>
+                              )}
                             </td>
                             <td className="px-6 py-4">
                               <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-xs font-bold rounded-full border border-indigo-100">
                                 {book.category}
                               </span>
                             </td>
-                            <td className="px-6 py-4 font-bold text-slate-700">{book.price}</td>
+                            <td className="px-6 py-4 font-bold text-slate-700 text-sm">{book.price}</td>
                             <td className="px-6 py-4">
                               <div className="flex gap-2">
                                 {book.file_url ? (
@@ -785,60 +933,110 @@ export default function BookManagePage() {
           </>
         ) : (
           /* STRIPE CONFIGURATION TAB */
-          <div className="space-y-6">
-            {/* Active Account Banner */}
-            <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-8 text-white shadow-xl relative overflow-hidden">
-              <div className="absolute right-0 top-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
+          <div className="space-y-8">
+            
+            {/* Banner */}
+            <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
                 <div className="space-y-2">
                   <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/20 text-emerald-300 text-xs font-bold rounded-full border border-emerald-500/30">
-                    <Zap className="w-3.5 h-3.5" /> Dynamic Multi-Account Payment Router
+                    <Zap className="w-3.5 h-3.5" /> 10 Storefront Multi-Stripe Gateway Router
                   </div>
-                  <h2 className="text-2xl font-bold">Stripe Account Configurations</h2>
-                  <p className="text-slate-300 text-sm max-w-2xl">
-                    Add multiple Stripe accounts and switch active destination keys with 1-click. Customers will automatically pay directly to the selected active Stripe account without redeploying Vercel!
+                  <h2 className="text-xl sm:text-2xl font-bold">Isolated Stripe Payment Gateways</h2>
+                  <p className="text-slate-300 text-xs sm:text-sm max-w-2xl">
+                    Each of your 10 bookstore websites has its own dedicated Stripe account! Customers checking out on any site will pay directly to that specific store's Stripe gateway.
                   </p>
                 </div>
                 <button 
-                  onClick={handleStartAddStripeSetting}
-                  className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-6 py-3.5 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-500/30 transition-all text-sm whitespace-nowrap"
+                  onClick={() => handleStartAddStripeSetting()}
+                  className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-6 py-3 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-500/30 transition-all text-xs sm:text-sm whitespace-nowrap"
                 >
-                  <Plus className="w-5 h-5" />
-                  Add Stripe Account
+                  <Plus className="w-4 h-4" />
+                  Add Stripe Gateway
                 </button>
               </div>
-
-              {activeStripeSetting ? (
-                <div className="mt-8 pt-6 border-t border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white/5 p-4 rounded-2xl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400">
-                      <ShieldCheck className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-400 font-medium uppercase tracking-wider">Currently Active Receiving Account</div>
-                      <div className="text-lg font-bold text-emerald-300 flex items-center gap-2">
-                        {activeStripeSetting.account_name}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-300 font-mono bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
-                    Secret Key: {activeStripeSetting.secret_key.slice(0, 12)}••••••••
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-8 pt-6 border-t border-white/10 text-xs text-amber-300 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                  No custom active Stripe account selected. Currently falling back to default Vercel environment variables.
-                </div>
-              )}
             </div>
 
-            {/* Accounts Table */}
+            {/* 10 Storefronts Stripe Overview Grid */}
+            <div>
+              <h3 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <Globe className="w-4 h-4 text-indigo-600" />
+                Storefront Payment Gateways Status (10 Sites)
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {STOREFRONTS.map((site) => {
+                  const siteSettings = stripeBySite[site.id] || [];
+                  const activeSetting = siteSettings.find(s => s.is_active);
+
+                  return (
+                    <div 
+                      key={site.id} 
+                      className={`bg-white rounded-2xl p-5 border transition-all ${
+                        activeSetting ? 'border-emerald-200 shadow-sm' : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: site.themeColor }} />
+                            <h4 className="font-bold text-slate-800 text-base">{site.name}</h4>
+                          </div>
+                          <span className="text-[11px] text-slate-400 font-mono">{site.domain}</span>
+                        </div>
+
+                        {activeSetting ? (
+                          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black rounded-full uppercase flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold rounded-full">
+                            Using Default .env
+                          </span>
+                        )}
+                      </div>
+
+                      {activeSetting ? (
+                        <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs">
+                          <div className="flex justify-between text-slate-600">
+                            <span>Account:</span>
+                            <span className="font-bold text-slate-800">{activeSetting.account_name}</span>
+                          </div>
+                          <div className="flex justify-between text-slate-500 font-mono text-[11px]">
+                            <span>Key:</span>
+                            <span>{activeSetting.secret_key.slice(0, 8)}••••••••</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs text-slate-500">
+                          No dedicated Stripe account configured yet for this site.
+                        </div>
+                      )}
+
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-400">
+                          {siteSettings.length} {siteSettings.length === 1 ? 'account' : 'accounts'} saved
+                        </span>
+                        <button
+                          onClick={() => handleStartAddStripeSetting(site.id)}
+                          className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 hover:underline"
+                        >
+                          <span>Configure</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* All Configured Accounts Table */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
+                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-base">
                   <CreditCard className="w-5 h-5 text-indigo-600" />
-                  Configured Stripe Accounts ({stripeSettings.length})
+                  All Saved Stripe Accounts ({stripeSettings.length})
                 </h3>
               </div>
 
@@ -846,6 +1044,7 @@ export default function BookManagePage() {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-bold border-b border-slate-100">
+                      <th className="px-6 py-4">Target Storefront</th>
                       <th className="px-6 py-4">Account Name</th>
                       <th className="px-6 py-4">Publishable Key</th>
                       <th className="px-6 py-4">Secret Key</th>
@@ -856,81 +1055,96 @@ export default function BookManagePage() {
                   <tbody className="divide-y divide-slate-100">
                     {stripeLoading ? (
                       <tr>
-                        <td colSpan={5} className="py-16 text-center">
+                        <td colSpan={6} className="py-16 text-center">
                           <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
                           <span className="text-slate-400">Loading Stripe configurations...</span>
                         </td>
                       </tr>
                     ) : stripeSettings.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-16 text-center">
+                        <td colSpan={6} className="py-16 text-center">
                           <CreditCard className="w-12 h-12 text-slate-300 mx-auto mb-3" />
                           <p className="text-slate-500 font-bold">No custom Stripe accounts configured yet.</p>
                           <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                            Click "+ Add Stripe Account" above to add your Publishable & Secret keys and receive payments directly into your account!
+                            Click "+ Add Stripe Gateway" above to assign dedicated Stripe keys to each website!
                           </p>
                         </td>
                       </tr>
                     ) : (
-                      stripeSettings.map((setting) => (
-                        <tr key={setting.id} className={`hover:bg-slate-50/60 transition-colors ${setting.is_active ? 'bg-emerald-50/30' : ''}`}>
-                          <td className="px-6 py-4">
-                            <div className="font-bold text-slate-800 flex items-center gap-2">
-                              {setting.account_name}
-                              {setting.is_active && (
-                                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
-                                  ACTIVE
+                      stripeSettings.map((setting) => {
+                        const targetSite = STOREFRONTS.find(s => s.id === (setting.site_id || 'all'));
+
+                        return (
+                          <tr key={setting.id} className={`hover:bg-slate-50/60 transition-colors ${setting.is_active ? 'bg-emerald-50/30' : ''}`}>
+                            <td className="px-6 py-4">
+                              {targetSite ? (
+                                <span className={`px-2.5 py-1 text-[10px] font-black rounded-md border ${targetSite.badgeBg} ${targetSite.badgeText}`}>
+                                  {targetSite.name}
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
+                                  🌐 All Stores (Global)
                                 </span>
                               )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                              {setting.publishable_key ? `${setting.publishable_key.slice(0, 16)}...` : 'N/A'}
-                            </code>
-                          </td>
-                          <td className="px-6 py-4">
-                            <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                              {setting.secret_key.slice(0, 12)}••••••••
-                            </code>
-                          </td>
-                          <td className="px-6 py-4">
-                            {setting.is_active ? (
-                              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600">
-                                <CheckCircle2 className="w-4 h-4" /> Active Destination
-                              </span>
-                            ) : (
-                              <span className="text-xs font-medium text-slate-400">Inactive</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex justify-end items-center gap-2">
-                              {!setting.is_active && (
-                                <button 
-                                  onClick={() => handleActivateStripeSetting(setting.id)}
-                                  className="px-3.5 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 border border-indigo-200"
-                                >
-                                  <Check className="w-3.5 h-3.5" /> Activate Account
-                                </button>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-slate-800 flex items-center gap-2">
+                                {setting.account_name}
+                                {setting.is_active && (
+                                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
+                                    ACTIVE
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                                {setting.publishable_key ? `${setting.publishable_key.slice(0, 16)}...` : 'N/A'}
+                              </code>
+                            </td>
+                            <td className="px-6 py-4">
+                              <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
+                                {setting.secret_key.slice(0, 10)}••••••••
+                              </code>
+                            </td>
+                            <td className="px-6 py-4">
+                              {setting.is_active ? (
+                                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600">
+                                  <CheckCircle2 className="w-4 h-4" /> Active Destination
+                                </span>
+                              ) : (
+                                <span className="text-xs font-medium text-slate-400">Inactive</span>
                               )}
-                              <button 
-                                onClick={() => handleStartEditStripeSetting(setting)}
-                                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                title="Edit Configuration"
-                              >
-                                <Edit2 className="w-4 h-4" />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteStripeSetting(setting.id)}
-                                className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                title="Delete Configuration"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <div className="flex justify-end items-center gap-2">
+                                {!setting.is_active && (
+                                  <button 
+                                    onClick={() => handleActivateStripeSetting(setting.id)}
+                                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 border border-indigo-200"
+                                  >
+                                    <Check className="w-3.5 h-3.5" /> Activate
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => handleStartEditStripeSetting(setting)}
+                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                  title="Edit Configuration"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteStripeSetting(setting.id)}
+                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                  title="Delete Configuration"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -940,35 +1154,60 @@ export default function BookManagePage() {
         )}
       </div>
 
-      {/* Add Stripe Account Modal */}
+      {/* Add / Edit Stripe Account Modal */}
       {isStripeModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <CreditCard className="w-6 h-6 text-indigo-600" />
-                Add Stripe Account Configuration
+                {editingStripeSetting ? "Edit Stripe Account" : "Add Storefront Stripe Gateway"}
               </h2>
               <button onClick={() => setIsStripeModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleAddStripeSettingSubmit} className="p-8 space-y-6">
+            <form onSubmit={handleAddStripeSettingSubmit} className="p-8 space-y-5">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Account Name</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Bookstore Storefront</label>
+                <select
+                  required
+                  value={stripeFormData.site_id}
+                  onChange={(e) => {
+                    const chosen = e.target.value;
+                    const siteObj = STOREFRONTS.find(s => s.id === chosen);
+                    setStripeFormData({
+                      ...stripeFormData,
+                      site_id: chosen,
+                      account_name: stripeFormData.account_name || (siteObj ? `${siteObj.name} Gateway` : "")
+                    });
+                  }}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm font-semibold bg-white"
+                >
+                  <option value="all">🌐 All Storefronts (Global Fallback)</option>
+                  {STOREFRONTS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.domain})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Account Label / Nickname</label>
                 <input 
                   required
                   type="text" 
-                  placeholder="e.g. BookPatr Main Store, Backup Account"
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800"
+                  placeholder="e.g. PickTomes Official Stripe Gateway"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm"
                   value={stripeFormData.account_name}
                   onChange={(e) => setStripeFormData({...stripeFormData, account_name: e.target.value})}
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Publishable Key (pk_live_... or pk_test_...)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Publishable Key (pk_live_... or pk_test_...)</label>
                 <input 
                   type="text" 
                   placeholder="pk_live_51U0CrfRMPnMtVmqSBawUCkd..."
@@ -979,7 +1218,7 @@ export default function BookManagePage() {
               </div>
 
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Secret Key (sk_live_... or sk_test_...)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Secret Key (sk_live_... or sk_test_...)</label>
                 <input 
                   required
                   type="password" 
@@ -988,7 +1227,7 @@ export default function BookManagePage() {
                   value={stripeFormData.secret_key}
                   onChange={(e) => setStripeFormData({...stripeFormData, secret_key: e.target.value})}
                 />
-                <p className="text-[11px] text-slate-400 mt-1">Secret Key is used on backend to instantiate Stripe checkout sessions.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Secret Key is used securely on the backend to create checkout sessions.</p>
               </div>
 
               <div className="flex items-center gap-3 pt-2">
@@ -999,26 +1238,26 @@ export default function BookManagePage() {
                   onChange={(e) => setStripeFormData({...stripeFormData, is_active: e.target.checked})}
                   className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
-                <label htmlFor="is_active_checkbox" className="text-sm font-bold text-slate-700 cursor-pointer">
-                  Set as active payment receiving account immediately
+                <label htmlFor="is_active_checkbox" className="text-xs font-bold text-slate-700 cursor-pointer">
+                  Set as active receiving gateway for this storefront immediately
                 </label>
               </div>
 
-              <div className="pt-6 flex gap-4 border-t border-slate-100">
+              <div className="pt-4 flex gap-4 border-t border-slate-100">
                 <button 
                   type="button" 
                   onClick={() => setIsStripeModalOpen(false)}
-                  className="flex-1 px-6 py-4 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                  className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
                   Cancel
                 </button>
                 <button 
                   disabled={isSubmitting}
                   type="submit" 
-                  className="flex-2 px-12 py-4 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-2 px-8 py-3.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
-                  {isSubmitting && <Loader2 className="w-5 h-5 animate-spin" />}
-                  Save Stripe Account
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Save Stripe Gateway
                 </button>
               </div>
             </form>
@@ -1026,14 +1265,14 @@ export default function BookManagePage() {
         </div>
       )}
 
-      {/* Bulk Upload Modal */}
+      {/* Bulk Archival Modal */}
       {isBulkModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                 <Plus className="w-6 h-6 text-indigo-600" />
-                Bulk Archive Library
+                Bulk Archive Library (EPUB Batch)
               </h2>
               <button onClick={() => setIsBulkModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
@@ -1041,6 +1280,23 @@ export default function BookManagePage() {
             </div>
 
             <div className="p-8 space-y-6">
+              {/* Target Storefront Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Storefront Destination</label>
+                <select 
+                  value={bulkSite}
+                  onChange={(e) => setBulkSite(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs font-bold rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white text-indigo-900"
+                >
+                  <option value="all">🌐 All Storefronts (Shared across all 10 sites)</option>
+                  {STOREFRONTS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.domain})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Batch Metadata Settings */}
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Batch Metadata Settings</h3>
@@ -1052,7 +1308,7 @@ export default function BookManagePage() {
                       placeholder="e.g. Martin Chavez"
                       value={bulkAuthor}
                       onChange={(e) => setBulkAuthor(e.target.value)}
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
                     />
                   </div>
                   <div>
@@ -1060,7 +1316,7 @@ export default function BookManagePage() {
                     <select 
                       value={bulkCategory}
                       onChange={(e) => setBulkCategory(e.target.value)}
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
                     >
                       <option value="Non-Fiction">Non-Fiction</option>
                       <option value="Fiction">Fiction</option>
@@ -1076,16 +1332,16 @@ export default function BookManagePage() {
                       placeholder="$12.00"
                       value={bulkPrice}
                       onChange={(e) => setBulkPrice(e.target.value)}
-                      className="w-full px-3 py-2 text-sm rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-8">
-                <div className="space-y-4">
-                  <label className="block text-sm font-bold text-slate-700">1. Select EPUB/PDF Files ({bulkBookFiles.length})</label>
-                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-indigo-400 transition-colors relative bg-white">
+              <div className="grid grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <label className="block text-xs font-bold text-slate-700">1. Select EPUB/PDF Files ({bulkBookFiles.length})</label>
+                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-400 transition-colors relative bg-white">
                     <input 
                       type="file" 
                       multiple
@@ -1093,20 +1349,20 @@ export default function BookManagePage() {
                       onChange={(e) => setBulkBookFiles(Array.from(e.target.files || []))}
                       className="absolute inset-0 opacity-0 cursor-pointer"
                     />
-                    <FileText className="w-8 h-8 text-indigo-500 mx-auto mb-2" />
-                    <p className="text-xs text-slate-600 font-bold">Drop EPUB/PDF Files Here</p>
-                    <p className="text-[10px] text-slate-400 mt-1">EPUB covers & descriptions are auto-extracted!</p>
+                    <FileText className="w-7 h-7 text-indigo-500 mx-auto mb-1.5" />
+                    <p className="text-xs text-slate-600 font-bold">Drop EPUB/PDF Files</p>
+                    <p className="text-[10px] text-slate-400 mt-1">EPUB covers & descriptions auto-extracted!</p>
                   </div>
-                  <div className="max-h-36 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
+                  <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
                     {bulkBookFiles.map((f, idx) => {
                       const cleanedName = f.name.replace(/\.[^/.]+$/, "").replace(/^[\d\s.\-_]+/, "").replace(/_/g, " ").trim();
                       return (
-                        <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100 group/item">
+                        <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
                           <div className="truncate flex-grow pr-2">
                             <span className="font-medium text-slate-700">{cleanedName}</span>
                             {f.name.toLowerCase().endsWith(".epub") && (
                               <span className="ml-2 text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">
-                                Auto Cover & Intro
+                                Auto Cover
                               </span>
                             )}
                           </div>
@@ -1122,9 +1378,9 @@ export default function BookManagePage() {
                   </div>
                 </div>
 
-                <div className="space-y-4">
-                  <label className="block text-sm font-bold text-slate-700">2. Optional Manual Covers ({bulkCoverFiles.length})</label>
-                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center hover:border-indigo-400 transition-colors relative bg-white">
+                <div className="space-y-3">
+                  <label className="block text-xs font-bold text-slate-700">2. Optional Manual Covers ({bulkCoverFiles.length})</label>
+                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-400 transition-colors relative bg-white">
                     <input 
                       type="file" 
                       multiple
@@ -1132,13 +1388,13 @@ export default function BookManagePage() {
                       onChange={(e) => setBulkCoverFiles(Array.from(e.target.files || []))}
                       className="absolute inset-0 opacity-0 cursor-pointer"
                     />
-                    <ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                    <p className="text-xs text-slate-400 font-medium">Drop External Covers (If Needed)</p>
+                    <ImageIcon className="w-7 h-7 text-slate-300 mx-auto mb-1.5" />
+                    <p className="text-xs text-slate-400 font-medium">Drop External Covers</p>
                     <p className="text-[10px] text-slate-400 mt-1">Leaves empty if using built-in EPUB covers</p>
                   </div>
-                  <div className="max-h-36 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
+                  <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
                     {bulkCoverFiles.map((f, idx) => (
-                      <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100 group/item">
+                      <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
                         <span className="truncate flex-grow">{f.name}</span>
                         <button 
                           onClick={() => setBulkCoverFiles(bulkCoverFiles.filter((_, i) => i !== idx))}
@@ -1170,17 +1426,17 @@ export default function BookManagePage() {
               <div className="pt-4 flex gap-4">
                 <button 
                   onClick={() => setIsBulkModalOpen(false)}
-                  className="flex-1 px-6 py-4 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                  className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
                   Cancel
                 </button>
                 <button 
                   disabled={isSubmitting || bulkBookFiles.length === 0}
                   onClick={handleBulkSubmit}
-                  className="flex-2 px-12 py-4 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-2 px-10 py-3.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
-                  {isSubmitting && <Loader2 className="w-5 h-5 animate-spin" />}
-                  Archive Collection
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Upload to Storefront
                 </button>
               </div>
             </div>
@@ -1188,46 +1444,64 @@ export default function BookManagePage() {
         </div>
       )}
 
-      {/* Modal Form */}
+      {/* Add / Edit Book Modal Form */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <h2 className="text-xl font-bold text-slate-800">
-                {editingBook ? "Edit Book Details" : "Add New Volume"}
+                {editingBook ? "Edit Book Details" : "Add New Book"}
               </h2>
               <button onClick={resetForm} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-8 space-y-6">
-              <div className="grid grid-cols-2 gap-6">
+            <form onSubmit={handleSubmit} className="p-8 space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                
+                {/* Storefront Selector */}
                 <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Book Title</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Target Storefront</label>
+                  <select 
+                    value={formData.site_id}
+                    onChange={(e) => setFormData({...formData, site_id: e.target.value})}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs font-bold text-indigo-900 bg-white"
+                  >
+                    <option value="all">🌐 All Storefronts (Shared across all 10 sites)</option>
+                    {STOREFRONTS.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.domain})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Book Title</label>
                   <input 
                     required
                     type="text" 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                     value={formData.title}
                     onChange={(e) => setFormData({...formData, title: e.target.value})}
                   />
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Author</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Author</label>
                   <input 
                     required
                     type="text" 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                     value={formData.author}
                     onChange={(e) => setFormData({...formData, author: e.target.value})}
                   />
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Category</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
                   <select 
                     required
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                     value={formData.category}
                     onChange={(e) => setFormData({...formData, category: e.target.value})}
                   >
@@ -1240,75 +1514,75 @@ export default function BookManagePage() {
                   </select>
                 </div>
                 <div className="col-span-1">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Price (e.g. $24.00)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Price (e.g. $14.99)</label>
                   <input 
                     required
                     type="text" 
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                     value={formData.price}
                     onChange={(e) => setFormData({...formData, price: e.target.value})}
                   />
                 </div>
                 <div className="col-span-1">
-                   <label className="block text-sm font-bold text-slate-700 mb-2">Pages</label>
+                   <label className="block text-xs font-bold text-slate-700 mb-1">Pages</label>
                    <input 
                      type="text" 
-                     className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-xs"
                      value={formData.pages}
                      onChange={(e) => setFormData({...formData, pages: e.target.value})}
                    />
                 </div>
                 <div className="col-span-2">
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Description</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Description</label>
                   <textarea 
-                    rows={6}
+                    rows={4}
                     placeholder="Full introduction & description..."
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-y text-sm leading-relaxed"
+                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-y text-xs leading-relaxed"
                     value={formData.description}
                     onChange={(e) => setFormData({...formData, description: e.target.value})}
                   />
                 </div>
               </div>
 
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
-                      <FileText className="w-4 h-4" /> Book File (PDF/EPUB)
-                    </label>
-                    <input 
-                      type="file" 
-                      accept=".pdf,.epub,.doc,.docx"
-                      onChange={(e) => setBookFile(e.target.files?.[0] || null)}
-                      className="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-2 flex items-center gap-2">
-                      <ImageIcon className="w-4 h-4" /> Cover Image
-                    </label>
-                    <input 
-                      type="file" 
-                      accept="image/*"
-                      onChange={(e) => setCoverImage(e.target.files?.[0] || null)}
-                      className="text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                    />
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5" /> Book File (PDF/EPUB)
+                  </label>
+                  <input 
+                    type="file" 
+                    accept=".pdf,.epub,.doc,.docx"
+                    onChange={(e) => setBookFile(e.target.files?.[0] || null)}
+                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                  />
                 </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5" /> Cover Image
+                  </label>
+                  <input 
+                    type="file" 
+                    accept="image/*"
+                    onChange={(e) => setCoverImage(e.target.files?.[0] || null)}
+                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                  />
+                </div>
+              </div>
 
-              <div className="pt-6 flex gap-4">
+              <div className="pt-4 flex gap-4 border-t border-slate-100">
                 <button 
                   type="button" 
                   onClick={resetForm}
-                  className="flex-1 px-6 py-4 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                  className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
                   Cancel
                 </button>
                 <button 
                   disabled={isSubmitting}
                   type="submit" 
-                  className="flex-2 px-12 py-4 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="flex-2 px-10 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
-                  {isSubmitting && <Loader2 className="w-5 h-5 animate-spin" />}
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                   {editingBook ? "Save Changes" : "Archive Book"}
                 </button>
               </div>
@@ -1334,32 +1608,32 @@ export default function BookManagePage() {
               </button>
             </div>
 
-            <form onSubmit={handleBulkRandomizePricesSubmit} className="p-8 space-y-6">
+            <form onSubmit={handleBulkRandomizePricesSubmit} className="p-8 space-y-5">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   Target Price Pool (One price per line)
                 </label>
-                <p className="text-xs text-slate-500 mb-3">
+                <p className="text-[11px] text-slate-500 mb-2">
                   Enter prices separated by ENTER. Every target book will be assigned a randomly chosen price from this list!
                 </p>
                 <textarea
                   required
-                  rows={6}
+                  rows={5}
                   value={randomPriceInput}
                   onChange={(e) => setRandomPriceInput(e.target.value)}
                   placeholder="0.50&#10;0.99&#10;1.50&#10;2.99&#10;4.99&#10;9.99"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none font-mono text-sm leading-relaxed text-slate-800"
+                  className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none font-mono text-xs leading-relaxed text-slate-800"
                 />
-                <div className="mt-2 text-xs font-bold text-emerald-600 flex items-center gap-1.5">
+                <div className="mt-1.5 text-xs font-bold text-emerald-600 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5" />
                   {randomPriceInput.split('\n').filter(l => l.trim().length > 0).length} prices in pool
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-2">Apply To:</label>
-                <div className="grid grid-cols-2 gap-4">
-                  <label className={`p-4 rounded-2xl border-2 flex items-center gap-3 cursor-pointer transition-all ${
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Apply To:</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
                     randomPriceTarget === 'all' ? 'border-emerald-500 bg-emerald-50/40 text-emerald-900 font-bold' : 'border-slate-200 text-slate-600'
                   }`}>
                     <input 
@@ -1369,10 +1643,10 @@ export default function BookManagePage() {
                       onChange={() => setRandomPriceTarget('all')}
                       className="w-4 h-4 text-emerald-600"
                     />
-                    <span className="text-xs">All Books ({books.length} items)</span>
+                    <span className="text-xs">Current View ({books.length} items)</span>
                   </label>
 
-                  <label className={`p-4 rounded-2xl border-2 flex items-center gap-3 cursor-pointer transition-all ${
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
                     selectedBookIds.length === 0 ? 'opacity-50 pointer-events-none border-slate-200' :
                     randomPriceTarget === 'selected' ? 'border-emerald-500 bg-emerald-50/40 text-emerald-900 font-bold' : 'border-slate-200 text-slate-600'
                   }`}>
@@ -1390,7 +1664,7 @@ export default function BookManagePage() {
               </div>
 
               {randomPriceProgress.total > 0 && (
-                <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-200 space-y-2">
+                <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 space-y-1.5">
                   <div className="flex justify-between text-xs font-bold text-emerald-800">
                     <span>Randomizing prices...</span>
                     <span>{randomPriceProgress.current} / {randomPriceProgress.total}</span>
@@ -1404,18 +1678,18 @@ export default function BookManagePage() {
                 </div>
               )}
 
-              <div className="pt-4 flex gap-4 border-t border-slate-100">
+              <div className="pt-3 flex gap-4 border-t border-slate-100">
                 <button 
                   type="button" 
                   onClick={() => setIsRandomPriceModalOpen(false)}
-                  className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-sm"
+                  className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
                   Cancel
                 </button>
                 <button 
                   disabled={isSubmitting}
                   type="submit" 
-                  className="flex-2 px-8 py-3.5 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
+                  className="flex-2 px-8 py-3 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
                 >
                   {isSubmitting ? (
                     <>
@@ -1437,3 +1711,6 @@ export default function BookManagePage() {
     </div>
   );
 }
+
+
+
