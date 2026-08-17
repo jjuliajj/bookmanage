@@ -63,14 +63,10 @@ export const getBooks = (site?: string) => {
 
 export const getBook = (id: string) => api.get<Book>(`/books/${id}`);
 
-export const createBook = (formData: FormData) => api.post('/books', formData, {
-  headers: { 'Content-Type': 'multipart/form-data' }
-});
+export const createBook = (formData: FormData) => api.post<Book>('/books', formData);
 
-export const updateBook = (id: string, data: FormData | Partial<Book>) => {
-  const headers = data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : {};
-  return api.put(`/books/${id}`, data, { headers });
-};
+export const updateBook = (id: string, data: FormData | Partial<Book>) => api.put<Book>(`/books/${id}`, data);
+
 
 export const deleteBook = (id: string) => api.delete(`/books/${id}`);
 export const deleteBatchBooks = (ids: string[]) => api.post('/books/delete-batch', { ids });

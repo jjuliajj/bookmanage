@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Plus, 
   Search, 
@@ -53,8 +53,7 @@ import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
 export default function BookManagePage() {
   const [activeTab, setActiveTab] = useState<'books' | 'stripe'>('books');
-  // Default to first storefront or 'all'
-  const [selectedSite, setSelectedSite] = useState<string>('bookbazaar');
+  const [selectedSite, setSelectedSite] = useState<string>('bookpatr');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -62,11 +61,28 @@ export default function BookManagePage() {
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Custom Website Selector Dropdown States
+  const [isSiteDropdownOpen, setIsSiteDropdownOpen] = useState(false);
+  const [siteSearchTerm, setSiteSearchTerm] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsSiteDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   // Selection & Filter states
   const [selectedBookIds, setSelectedBookIds] = useState<string[]>([]);
   const [selectedAuthor, setSelectedAuthor] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedPriceFilter, setSelectedPriceFilter] = useState("");
+
 
   // Stripe Settings states
   const [stripeSettings, setStripeSettings] = useState<StripeSetting[]>([]);
@@ -157,7 +173,46 @@ export default function BookManagePage() {
            stripeSettings.find(s => (s.site_id === 'all' || !s.site_id) && s.is_active);
   }, [stripeSettings, selectedSite]);
 
+  // Author List for filtering
+  const authors = useMemo(() => {
+    const list = Array.from(new Set(books.map(b => b.author).filter(Boolean)));
+    return list.sort();
+  }, [books]);
+
+  // Categories List for filtering
+  const categories = useMemo(() => {
+    const list = Array.from(new Set(books.map(b => b.category).filter(Boolean)));
+    return list.sort();
+  }, [books]);
+
+  // Prices List for filtering
+  const prices = useMemo(() => {
+    const list = Array.from(new Set(books.map(b => b.price).filter(Boolean)));
+    return list.sort();
+  }, [books]);
+
+  // Computed Filtered Books
+  const filteredBooks = useMemo(() => {
+    return books.filter((book) => {
+      const matchesSearch =
+        book.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        book.author.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        book.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (book.description && book.description.toLowerCase().includes(searchTerm.toLowerCase()));
+
+      const matchesAuthor = selectedAuthor ? book.author === selectedAuthor : true;
+      const matchesCategory = selectedCategory ? book.category === selectedCategory : true;
+      const matchesPrice = selectedPriceFilter ? book.price === selectedPriceFilter : true;
+
+      return matchesSearch && matchesAuthor && matchesCategory && matchesPrice;
+    });
+  }, [books, searchTerm, selectedAuthor, selectedCategory, selectedPriceFilter]);
+
+  const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
+  const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
+
   const handleDelete = async (id: string) => {
+
     if (!confirm("Are you sure you want to delete this book?")) return;
     try {
       await deleteBook(id);
@@ -422,7 +477,7 @@ export default function BookManagePage() {
     setIsSubmitting(true);
     setBulkProgress({ current: 0, total: bulkBookFiles.length });
 
-    const targetSiteId = selectedSite !== 'all' ? selectedSite : 'bookbazaar';
+    const targetSiteId = selectedSite !== 'all' ? selectedSite : 'bookpatr';
 
     try {
       for (let i = 0; i < bulkBookFiles.length; i++) {
@@ -475,56 +530,28 @@ export default function BookManagePage() {
       setBulkCoverFiles([]);
       setIsBulkModalOpen(false);
       alert(`Đã upload thành công ${bulkBookFiles.length} cuốn sách lên website ${targetSiteId.toUpperCase()}!`);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Bulk upload failed:", error);
-      alert("Bulk upload failed at index " + bulkProgress.current);
+      const errDetail = error.response?.data?.error || error.message || "Unknown error";
+      alert(`Bulk upload failed at index ${bulkProgress.current}: ${errDetail}`);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Get unique filter values
-  const uniqueAuthors = Array.from(new Set(books.map(b => b.author).filter(Boolean))).sort();
-  const uniqueCategories = Array.from(new Set(books.map(b => b.category).filter(Boolean))).sort();
-
-  // Filter & Sort Logic
-  const filteredBooks = books.filter(book => {
-    const matchesSearch = 
-      book.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      book.author.toLowerCase().includes(searchTerm.toLowerCase());
-
-    const matchesAuthor = !selectedAuthor || book.author === selectedAuthor;
-    const matchesCategory = !selectedCategory || book.category === selectedCategory;
-    
-    let matchesPrice = true;
-    const numericPrice = parseFloat((book.price || "0").replace(/[^0-9.]/g, "")) || 0;
-    if (selectedPriceFilter === "under5") {
-      matchesPrice = numericPrice < 5;
-    } else if (selectedPriceFilter === "5to10") {
-      matchesPrice = numericPrice >= 5 && numericPrice <= 10;
-    } else if (selectedPriceFilter === "over10") {
-      matchesPrice = numericPrice > 10;
-    }
-
-    return matchesSearch && matchesAuthor && matchesCategory && matchesPrice;
-  }).sort((a, b) => {
-    if (selectedPriceFilter === "priceAsc") {
-      const priceA = parseFloat((a.price || "").replace(/[^0-9.]/g, "")) || 0;
-      const priceB = parseFloat((b.price || "").replace(/[^0-9.]/g, "")) || 0;
-      return priceA - priceB;
-    }
-    if (selectedPriceFilter === "priceDesc") {
-      const priceA = parseFloat((a.price || "").replace(/[^0-9.]/g, "")) || 0;
-      const priceB = parseFloat((b.price || "").replace(/[^0-9.]/g, "")) || 0;
-      return priceB - priceA;
-    }
-    return 0;
-  });
-
-  const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
-  const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
+  // Filter storefronts for dropdown search
+  const filteredStorefronts = useMemo(() => {
+    if (!siteSearchTerm.trim()) return STOREFRONTS;
+    const term = siteSearchTerm.toLowerCase();
+    return STOREFRONTS.filter(s => 
+      s.name.toLowerCase().includes(term) || 
+      (s.domain && s.domain.toLowerCase().includes(term)) ||
+      s.id.toLowerCase().includes(term)
+    );
+  }, [siteSearchTerm]);
 
   return (
+
     <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto space-y-6">
         
@@ -546,37 +573,158 @@ export default function BookManagePage() {
             </div>
           </div>
 
-          {/* WEBSITE SELECTOR DROPDOWN */}
+          {/* CUSTOM SEARCHABLE WEBSITE SELECTOR DROPDOWN */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
-            <div className="relative flex-grow sm:w-80">
+            <div className="relative flex-grow sm:w-84" ref={dropdownRef}>
               <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
                 Chọn Website Cần Quản Lý:
               </label>
-              <div className="relative">
-                <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600 pointer-events-none" />
-                <select
-                  value={selectedSite}
-                  onChange={(e) => setSelectedSite(e.target.value)}
-                  className="w-full pl-10 pr-10 py-3 rounded-2xl border-2 border-indigo-600 bg-indigo-50/50 text-indigo-950 font-bold text-sm focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer appearance-none shadow-sm"
-                >
-                  <option value="all">🌐 Tất cả các trang web ({STOREFRONTS.length} Stores - Xem tổng hợp)</option>
-                  <optgroup label={`Danh sách ${STOREFRONTS.length} Website`}>
-                    {STOREFRONTS.map((site) => (
-                      <option key={site.id} value={site.id}>
-                        {site.name} ({site.domain})
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-                <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600 pointer-events-none" />
-              </div>
+
+              {/* Dropdown Trigger Button */}
+              <button
+                type="button"
+                onClick={() => setIsSiteDropdownOpen(!isSiteDropdownOpen)}
+                className="w-full px-4 py-2.5 rounded-2xl border-2 border-indigo-600 bg-white hover:bg-indigo-50/40 text-slate-900 font-bold text-xs sm:text-sm flex items-center justify-between gap-3 shadow-xs transition-all focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5 truncate">
+                  {selectedSite === 'all' ? (
+                    <>
+                      <div className="w-7 h-7 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center flex-shrink-0">
+                        <Globe className="w-4 h-4" />
+                      </div>
+                      <div className="text-left truncate">
+                        <span className="font-bold text-indigo-950 block text-xs sm:text-sm truncate">Tất cả {STOREFRONTS.length} Website</span>
+                        <span className="text-[10px] text-slate-400 font-normal block">Xem tổng hợp danh mục</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span 
+                        className="w-3.5 h-3.5 rounded-full flex-shrink-0 shadow-xs" 
+                        style={{ backgroundColor: currentStorefront?.themeColor || '#4F46E5' }} 
+                      />
+                      <div className="text-left truncate">
+                        <span className="font-bold text-slate-900 block text-xs sm:text-sm truncate">{currentStorefront?.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono block truncate">{currentStorefront?.domain}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <ChevronDown className={`w-4 h-4 text-indigo-600 flex-shrink-0 transition-transform duration-200 ${isSiteDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Searchable Dropdown Popover Menu */}
+              {isSiteDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  {/* Search input in dropdown */}
+                  <div className="p-3 border-b border-slate-100 bg-slate-50/70">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                      <input 
+                        type="text"
+                        placeholder="Tìm theo tên website hoặc domain..."
+                        value={siteSearchTerm}
+                        onChange={(e) => setSiteSearchTerm(e.target.value)}
+                        autoFocus
+                        className="w-full pl-8 pr-7 py-2 text-xs rounded-xl border border-slate-200 bg-white font-medium text-slate-800 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                      {siteSearchTerm && (
+                        <button 
+                          onClick={() => setSiteSearchTerm("")}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Dropdown Options List */}
+                  <div className="max-h-72 overflow-y-auto p-1.5 space-y-1">
+                    {/* All Sites Option */}
+                    {(!siteSearchTerm || 'tat ca all'.includes(siteSearchTerm.toLowerCase())) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSite('all');
+                          setIsSiteDropdownOpen(false);
+                          setSiteSearchTerm("");
+                        }}
+                        className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left transition-colors cursor-pointer ${
+                          selectedSite === 'all' ? 'bg-indigo-50 text-indigo-950 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center flex-shrink-0">
+                            <Globe className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-indigo-950">🌐 Tất cả {STOREFRONTS.length} Website</div>
+                            <div className="text-[10px] text-slate-400">Xem tổng hợp danh mục sách toàn hệ thống</div>
+                          </div>
+                        </div>
+                        {selectedSite === 'all' && (
+                          <Check className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                        )}
+                      </button>
+                    )}
+
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1.5">
+                      Danh sách {filteredStorefronts.length} Website
+                    </div>
+
+                    {filteredStorefronts.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-400">
+                        Không tìm thấy website nào khớp với "{siteSearchTerm}"
+                      </div>
+                    ) : (
+                      filteredStorefronts.map((site) => {
+                        const isSelected = selectedSite === site.id;
+                        return (
+                          <button
+                            key={site.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSite(site.id);
+                              setIsSiteDropdownOpen(false);
+                              setSiteSearchTerm("");
+                            }}
+                            className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left transition-colors cursor-pointer ${
+                              isSelected ? 'bg-indigo-50 text-indigo-950 font-bold' : 'hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 truncate">
+                              <span 
+                                className="w-3.5 h-3.5 rounded-full flex-shrink-0 shadow-xs" 
+                                style={{ backgroundColor: site.themeColor }} 
+                              />
+                              <div className="truncate">
+                                <div className="text-xs font-bold text-slate-900 truncate flex items-center gap-1.5">
+                                  {site.name}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono truncate">
+                                  {site.domain}
+                                </div>
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <Check className="w-4 h-4 text-indigo-600 flex-shrink-0 ml-2" />
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* View Switcher: Books / Stripe */}
             <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 self-end sm:self-auto mt-auto">
               <button 
                 onClick={() => setActiveTab('books')}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
+                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
                   activeTab === 'books'
                     ? 'bg-white text-indigo-600 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -587,7 +735,7 @@ export default function BookManagePage() {
               </button>
               <button 
                 onClick={() => setActiveTab('stripe')}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all ${
+                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
                   activeTab === 'stripe'
                     ? 'bg-white text-indigo-600 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -617,6 +765,7 @@ export default function BookManagePage() {
             <span>💳 Cổng Stripe: <strong className="text-white">{activeStripeSettingForSite ? activeStripeSettingForSite.account_name : 'Mặc định (.env)'}</strong></span>
           </div>
         </div>
+
 
         {activeTab === 'books' ? (
           <>
@@ -702,8 +851,8 @@ export default function BookManagePage() {
                       onChange={(e) => setSelectedAuthor(e.target.value)}
                       className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer max-w-[140px] truncate"
                     >
-                      <option value="">Tất cả tác giả ({uniqueAuthors.length})</option>
-                      {uniqueAuthors.map(author => (
+                      <option value="">Tất cả tác giả ({authors.length})</option>
+                      {authors.map(author => (
                         <option key={author} value={author}>{author}</option>
                       ))}
                     </select>
@@ -717,12 +866,13 @@ export default function BookManagePage() {
                       onChange={(e) => setSelectedCategory(e.target.value)}
                       className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer"
                     >
-                      <option value="">Tất cả thể loại ({uniqueCategories.length})</option>
-                      {uniqueCategories.map(cat => (
+                      <option value="">Tất cả thể loại ({categories.length})</option>
+                      {categories.map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
                       ))}
                     </select>
                   </div>
+
 
                   {/* Price Filter */}
                   <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
