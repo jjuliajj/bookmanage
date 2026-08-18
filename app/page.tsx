@@ -35,7 +35,10 @@ import {
   Tag,
   Sliders,
   CheckSquare,
-  Square
+  Square,
+  Eye,
+  EyeOff,
+  Copy
 } from "lucide-react";
 import { 
   getBooks, 
@@ -158,6 +161,30 @@ export default function BookManagePage() {
     secret_key: "",
     is_active: true
   });
+  const [visibleKeys, setVisibleKeys] = useState<{ [key: string]: boolean }>({});
+  const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
+  const [showModalSecretKey, setShowModalSecretKey] = useState(false);
+  const [showModalPublishableKey, setShowModalPublishableKey] = useState(false);
+
+  const toggleKeyVisibility = (keyId: string) => {
+    setVisibleKeys(prev => ({
+      ...prev,
+      [keyId]: !prev[keyId]
+    }));
+  };
+
+  const handleCopyKey = async (text: string, identifier: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKeyId(identifier);
+      setTimeout(() => {
+        setCopiedKeyId(prev => (prev === identifier ? null : prev));
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy text: ", err);
+    }
+  };
 
   // Randomize Prices states
   const [isRandomPriceModalOpen, setIsRandomPriceModalOpen] = useState(false);
@@ -1230,7 +1257,7 @@ export default function BookManagePage() {
                     <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                       <th className="px-6 py-3.5">Tên Cổng / Gợi Nhớ</th>
                       <th className="px-6 py-3.5">Áp Dụng Cho Website</th>
-                      <th className="px-6 py-3.5">Publishable Key</th>
+                      <th className="px-6 py-3.5">Khóa Cổng (Publishable & Secret Key)</th>
                       <th className="px-6 py-3.5">Trạng Thái</th>
                       <th className="px-6 py-3.5 text-right">Thao Tác</th>
                     </tr>
@@ -1258,7 +1285,7 @@ export default function BookManagePage() {
                           <tr key={setting.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="px-6 py-4">
                               <div className="font-bold text-slate-800">{setting.account_name}</div>
-                              <div className="text-[11px] text-slate-400">ID: {setting.id.substring(0, 8)}...</div>
+                              <div className="text-[11px] text-slate-400 font-mono">ID: {setting.id.substring(0, 8)}...</div>
                             </td>
                             <td className="px-6 py-4">
                               {siteObj ? (
@@ -1271,8 +1298,92 @@ export default function BookManagePage() {
                                 </span>
                               )}
                             </td>
-                            <td className="px-6 py-4 font-mono text-[11px] text-slate-600">
-                              {setting.publishable_key ? `${setting.publishable_key.substring(0, 14)}...` : 'Chưa nhập PK'}
+                            <td className="px-6 py-4">
+                              <div className="space-y-1.5 min-w-[280px]">
+                                {/* Publishable Key Row */}
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded flex-shrink-0 w-7 text-center">
+                                    PK
+                                  </span>
+                                  {setting.publishable_key ? (
+                                    <div className="flex items-center justify-between gap-1 flex-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg">
+                                      <span className="font-mono text-[11px] text-slate-700 select-all truncate max-w-[180px] sm:max-w-[240px]">
+                                        {visibleKeys[`pk_${setting.id}`]
+                                          ? setting.publishable_key
+                                          : `${setting.publishable_key.substring(0, 12)}••••••••••••`}
+                                      </span>
+                                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleKeyVisibility(`pk_${setting.id}`)}
+                                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors cursor-pointer"
+                                          title={visibleKeys[`pk_${setting.id}`] ? "Ẩn Publishable Key" : "Xem full Publishable Key"}
+                                        >
+                                          {visibleKeys[`pk_${setting.id}`] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-indigo-600" />}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopyKey(setting.publishable_key || '', `pk_${setting.id}`)}
+                                          className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-white rounded transition-colors cursor-pointer"
+                                          title="Sao chép Publishable Key"
+                                        >
+                                          {copiedKeyId === `pk_${setting.id}` ? (
+                                            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">
+                                              <Check className="w-3 h-3" /> Đã chép
+                                            </span>
+                                          ) : (
+                                            <Copy className="w-3.5 h-3.5" />
+                                          )}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 italic">Chưa nhập PK</span>
+                                  )}
+                                </div>
+
+                                {/* Secret Key Row */}
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded flex-shrink-0 w-7 text-center">
+                                    SK
+                                  </span>
+                                  {setting.secret_key ? (
+                                    <div className="flex items-center justify-between gap-1 flex-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-lg">
+                                      <span className="font-mono text-[11px] text-slate-700 select-all truncate max-w-[180px] sm:max-w-[240px]">
+                                        {visibleKeys[`sk_${setting.id}`]
+                                          ? setting.secret_key
+                                          : `${setting.secret_key.substring(0, 10)}••••••••••••••••`}
+                                      </span>
+                                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleKeyVisibility(`sk_${setting.id}`)}
+                                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors cursor-pointer"
+                                          title={visibleKeys[`sk_${setting.id}`] ? "Ẩn Secret Key" : "Xem full Secret Key"}
+                                        >
+                                          {visibleKeys[`sk_${setting.id}`] ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-indigo-600" />}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopyKey(setting.secret_key || '', `sk_${setting.id}`)}
+                                          className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-white rounded transition-colors cursor-pointer"
+                                          title="Sao chép Secret Key"
+                                        >
+                                          {copiedKeyId === `sk_${setting.id}` ? (
+                                            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">
+                                              <Check className="w-3 h-3" /> Đã chép
+                                            </span>
+                                          ) : (
+                                            <Copy className="w-3.5 h-3.5" />
+                                          )}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 italic">Chưa nhập SK</span>
+                                  )}
+                                </div>
+                              </div>
                             </td>
                             <td className="px-6 py-4">
                               {setting.is_active ? (
@@ -1377,26 +1488,84 @@ export default function BookManagePage() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Publishable Key (pk_live_... hoặc pk_test_...)</label>
-                <input 
-                  type="text" 
-                  placeholder="pk_live_..."
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
-                  value={stripeFormData.publishable_key}
-                  onChange={(e) => setStripeFormData({...stripeFormData, publishable_key: e.target.value})}
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">Publishable Key (pk_live_... hoặc pk_test_...)</label>
+                  {stripeFormData.publishable_key && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyKey(stripeFormData.publishable_key, 'modal_pk')}
+                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedKeyId === 'modal_pk' ? (
+                        <span className="text-emerald-600 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> Đã chép PK
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Copy className="w-3.5 h-3.5" /> Sao chép PK
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input 
+                    type={showModalPublishableKey ? "text" : "password"} 
+                    placeholder="pk_live_..."
+                    className="w-full pl-4 pr-11 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
+                    value={stripeFormData.publishable_key}
+                    onChange={(e) => setStripeFormData({...stripeFormData, publishable_key: e.target.value})}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowModalPublishableKey(!showModalPublishableKey)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg cursor-pointer transition-colors"
+                    title={showModalPublishableKey ? "Ẩn Publishable Key" : "Xem Publishable Key"}
+                  >
+                    {showModalPublishableKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">Secret Key (sk_live_... hoặc sk_test_...)</label>
-                <input 
-                  required
-                  type="password" 
-                  placeholder="sk_live_... hoặc sk_test_..."
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
-                  value={stripeFormData.secret_key}
-                  onChange={(e) => setStripeFormData({...stripeFormData, secret_key: e.target.value})}
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">Secret Key (sk_live_... hoặc sk_test_...)</label>
+                  {stripeFormData.secret_key && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyKey(stripeFormData.secret_key, 'modal_sk')}
+                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedKeyId === 'modal_sk' ? (
+                        <span className="text-emerald-600 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> Đã chép SK
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Copy className="w-3.5 h-3.5" /> Sao chép SK
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input 
+                    required
+                    type={showModalSecretKey ? "text" : "password"} 
+                    placeholder="sk_live_... hoặc sk_test_..."
+                    className="w-full pl-4 pr-11 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none font-mono text-xs text-slate-800"
+                    value={stripeFormData.secret_key}
+                    onChange={(e) => setStripeFormData({...stripeFormData, secret_key: e.target.value})}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowModalSecretKey(!showModalSecretKey)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg cursor-pointer transition-colors"
+                    title={showModalSecretKey ? "Ẩn Secret Key" : "Xem Secret Key"}
+                  >
+                    {showModalSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-400 mt-1">Secret Key được sử dụng an toàn trên máy chủ backend để tạo phiên thanh toán.</p>
               </div>
 
