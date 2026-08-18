@@ -18,6 +18,28 @@ export const resolveBookSite = (b: any): string => {
   return 'bookpatr';
 };
 
+// Helper to parse and extract site_id and clean display name from a stripe setting
+export function parseStripeSetting(r: any): StripeSetting {
+  if (!r) return r;
+  let site_id = r.site_id;
+  let cleanName = r.account_name || '';
+
+  // Extract [site_id] prefix from account_name if present
+  const match = r.account_name && r.account_name.match(/^\[([a-zA-Z0-9_\-]+)\]\s*(.*)$/);
+  if (match) {
+    site_id = match[1];
+    cleanName = match[2] || r.account_name;
+  } else if (!site_id) {
+    site_id = 'bookpatr'; // default legacy records to bookpatr
+  }
+
+  return {
+    ...r,
+    site_id: (site_id || 'bookpatr').toLowerCase().trim(),
+    account_name: cleanName,
+  };
+}
+
 // 1. Direct Upload of Book EPUB/PDF to Supabase Storage (Bypasses Vercel Serverless Function -> 0 FOT)
 export async function uploadBookFileDirect(file: File): Promise<string> {
   const cleanName = file.name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '');
@@ -123,7 +145,7 @@ export async function createBookDirect(bookData: {
     if (error) throw error;
     const item = data[0];
     return { ...item, site_id: resolveBookSite(item) };
-  } catch (err: any) {
+  } catch {
     // Fallback without site_id column if needed
     const fallbackPayload = { ...payload };
     delete (fallbackPayload as any).site_id;
@@ -272,7 +294,7 @@ export async function deleteAllBooksDirect(siteId?: string): Promise<void> {
   }
 }
 
-// 11. Stripe Settings Direct Operations
+// 11. Stripe Settings Direct Operations (Site-Isolated Multi-Tenant)
 export async function fetchStripeSettingsDirect(siteId?: string): Promise<StripeSetting[]> {
   const { data, error } = await supabase
     .from('stripe_settings')
@@ -280,10 +302,10 @@ export async function fetchStripeSettingsDirect(siteId?: string): Promise<Stripe
     .order('created_at', { ascending: false });
 
   if (error) throw error;
-  let settings = data || [];
+  let settings = (data || []).map(parseStripeSetting);
 
   if (siteId && siteId !== 'all') {
-    settings = settings.filter((s: any) => !s.site_id || s.site_id === 'all' || s.site_id === siteId);
+    settings = settings.filter((s: any) => s.site_id === 'all' || s.site_id === siteId.toLowerCase().trim());
   }
 
   return settings;
@@ -296,74 +318,119 @@ export async function addStripeSettingDirect(data: {
   secret_key: string;
   is_active?: boolean;
 }): Promise<StripeSetting> {
-  const targetSite = data.site_id || 'all';
+  const targetSite = (data.site_id || 'all').toLowerCase().trim();
+  const cleanName = data.account_name.replace(/^\[[a-zA-Z0-9_\-]+\]\s*/, '').trim();
+  const formattedAccountName = `[${targetSite}] ${cleanName}`;
 
   if (data.is_active) {
-    try {
-      await supabase
-        .from('stripe_settings')
-        .update({ is_active: false })
-        .eq('site_id', targetSite);
-    } catch {
-      await supabase
-        .from('stripe_settings')
-        .update({ is_active: false })
-        .neq('id', '00000000-0000-0000-0000-000000000000');
+    const { data: allData } = await supabase.from('stripe_settings').select('*');
+    if (allData) {
+      const toDeactivate = allData
+        .map(parseStripeSetting)
+        .filter((s: any) => s.site_id === targetSite && s.is_active)
+        .map((s: any) => s.id);
+      if (toDeactivate.length > 0) {
+        await supabase.from('stripe_settings').update({ is_active: false }).in('id', toDeactivate);
+      }
     }
   }
 
-  const { data: inserted, error } = await supabase
-    .from('stripe_settings')
-    .insert([
-      {
-        site_id: targetSite,
-        account_name: data.account_name,
-        publishable_key: data.publishable_key || '',
-        secret_key: data.secret_key,
-        is_active: Boolean(data.is_active),
-      },
-    ])
-    .select();
+  const insertPayload = {
+    account_name: formattedAccountName,
+    publishable_key: data.publishable_key || '',
+    secret_key: data.secret_key,
+    is_active: Boolean(data.is_active),
+  };
 
-  if (error) throw error;
-  return inserted[0];
+  let inserted: any = null;
+  try {
+    const { data: res, error } = await supabase
+      .from('stripe_settings')
+      .insert([{ ...insertPayload, site_id: targetSite }])
+      .select();
+    if (error) throw error;
+    inserted = res;
+  } catch {
+    const { data: res, error } = await supabase
+      .from('stripe_settings')
+      .insert([insertPayload])
+      .select();
+    if (error) throw error;
+    inserted = res;
+  }
+
+  return parseStripeSetting(inserted[0]);
 }
 
 export async function updateStripeSettingDirect(
   id: string,
   data: Partial<StripeSetting>
 ): Promise<StripeSetting> {
-  if (data.is_active && data.site_id) {
-    await supabase
-      .from('stripe_settings')
-      .update({ is_active: false })
-      .eq('site_id', data.site_id)
-      .neq('id', id);
+  const { data: currentRecord } = await supabase.from('stripe_settings').select('*').eq('id', id).single();
+  const currentParsed = parseStripeSetting(currentRecord);
+
+  const targetSite = (data.site_id || currentParsed?.site_id || 'all').toLowerCase().trim();
+  const cleanName = (data.account_name !== undefined ? data.account_name : currentParsed?.account_name || '')
+    .replace(/^\[[a-zA-Z0-9_\-]+\]\s*/, '').trim();
+  const formattedAccountName = `[${targetSite}] ${cleanName}`;
+
+  const updateFields: any = {
+    account_name: formattedAccountName,
+  };
+  if (data.publishable_key !== undefined) updateFields.publishable_key = data.publishable_key;
+  if (data.secret_key !== undefined) updateFields.secret_key = data.secret_key;
+  if (data.is_active !== undefined) updateFields.is_active = data.is_active;
+
+  if (data.is_active) {
+    const { data: allData } = await supabase.from('stripe_settings').select('*');
+    if (allData) {
+      const toDeactivate = allData
+        .map(parseStripeSetting)
+        .filter((s: any) => s.id !== id && s.site_id === targetSite && s.is_active)
+        .map((s: any) => s.id);
+      if (toDeactivate.length > 0) {
+        await supabase.from('stripe_settings').update({ is_active: false }).in('id', toDeactivate);
+      }
+    }
   }
 
-  const { data: updated, error } = await supabase
-    .from('stripe_settings')
-    .update(data)
-    .eq('id', id)
-    .select();
+  let updated: any = null;
+  try {
+    const { data: res, error } = await supabase
+      .from('stripe_settings')
+      .update({ ...updateFields, site_id: targetSite })
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    updated = res;
+  } catch {
+    const { data: res, error } = await supabase
+      .from('stripe_settings')
+      .update(updateFields)
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    updated = res;
+  }
 
-  if (error) throw error;
-  return updated[0];
+  return parseStripeSetting(updated[0]);
 }
 
 export async function activateStripeSettingDirect(id: string, siteId?: string): Promise<StripeSetting> {
-  const targetSite = siteId || 'all';
+  const { data: targetRecord } = await supabase.from('stripe_settings').select('*').eq('id', id).single();
+  const parsed = parseStripeSetting(targetRecord);
+  const targetSite = (siteId || parsed.site_id || 'all').toLowerCase().trim();
 
-  try {
-    await supabase
-      .from('stripe_settings')
-      .update({ is_active: false })
-      .eq('site_id', targetSite);
-  } catch {
-    await supabase
-      .from('stripe_settings')
-      .update({ is_active: false })
-      .neq('id', '00000000-0000-0000-0000-000000000000');
+  // Deactivate other accounts belonging to this site only
+  const { data: allData } = await supabase.from('stripe_settings').select('*');
+  if (allData) {
+    const toDeactivate = allData
+      .map(parseStripeSetting)
+      .filter((s: any) => s.id !== id && s.site_id === targetSite && s.is_active)
+      .map((s: any) => s.id);
+    if (toDeactivate.length > 0) {
+      await supabase.from('stripe_settings').update({ is_active: false }).in('id', toDeactivate);
+    }
   }
 
   const { data, error } = await supabase
@@ -373,7 +440,7 @@ export async function activateStripeSettingDirect(id: string, siteId?: string): 
     .select();
 
   if (error) throw error;
-  return data[0];
+  return parseStripeSetting(data[0]);
 }
 
 export async function deleteStripeSettingDirect(id: string): Promise<void> {

@@ -244,7 +244,7 @@ export default function BookManagePage() {
       return stripeSettings.find(s => s.is_active);
     }
     return stripeSettings.find(s => s.site_id === selectedSite && s.is_active) || 
-           stripeSettings.find(s => (s.site_id === 'all' || !s.site_id) && s.is_active);
+           stripeSettings.find(s => s.site_id === 'all' && s.is_active);
   }, [stripeSettings, selectedSite]);
 
   // Author List for filtering
