@@ -9,28 +9,33 @@ import {
   FileText, 
   Image as ImageIcon, 
   Loader2, 
-  X,
-  Book as BookIcon,
-  ExternalLink,
-  Filter,
-  RotateCcw,
-  Trash,
-  CreditCard,
-  CheckCircle2,
-  Key,
-  ShieldCheck,
-  Zap,
-  Check,
-  DollarSign,
-  Sparkles,
-  Dices,
-  Globe,
-  Layers,
-  Store,
-  ChevronRight,
-  RefreshCw,
-  AlertCircle,
-  ChevronDown
+  X, 
+  Book as BookIcon, 
+  ExternalLink, 
+  Filter, 
+  RotateCcw, 
+  Trash, 
+  CreditCard, 
+  CheckCircle2, 
+  Key, 
+  ShieldCheck, 
+  Zap, 
+  Check, 
+  DollarSign, 
+  Sparkles, 
+  Dices, 
+  Globe, 
+  Layers, 
+  Store, 
+  ChevronRight, 
+  RefreshCw, 
+  AlertCircle, 
+  ChevronDown,
+  Shuffle,
+  Tag,
+  Sliders,
+  CheckSquare,
+  Square
 } from "lucide-react";
 import { 
   getBooks, 
@@ -39,17 +44,75 @@ import {
   deleteAllBooks, 
   createBook, 
   updateBook, 
-  Book,
-  getStripeSettings,
-  addStripeSetting,
-  updateStripeSetting,
-  activateStripeSetting,
-  deleteStripeSetting,
-  StripeSetting,
-  STOREFRONTS,
-  StorefrontSite
+  Book, 
+  getStripeSettings, 
+  addStripeSetting, 
+  updateStripeSetting, 
+  activateStripeSetting, 
+  deleteStripeSetting, 
+  StripeSetting, 
+  STOREFRONTS, 
+  StorefrontSite 
 } from "@/lib/api";
+import { 
+  uploadBookFileDirect, 
+  uploadCoverFileDirect, 
+  createBookDirect, 
+  updateBookDirect, 
+  batchUpdateCategoriesDirect, 
+  batchUpdatePricesDirect,
+  fetchBooksDirect,
+  deleteBookDirect,
+  deleteBatchBooksDirect,
+  deleteAllBooksDirect,
+  fetchStripeSettingsDirect,
+  addStripeSettingDirect,
+  updateStripeSettingDirect,
+  activateStripeSettingDirect,
+  deleteStripeSettingDirect
+} from "@/lib/supabase";
 import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
+
+export const DEFAULT_CATEGORIES = [
+  "Fiction",
+  "Non-Fiction",
+  "Philosophy",
+  "Classic",
+  "Poetry",
+  "Sci-Fi",
+  "Self-Help",
+  "History",
+  "Biography",
+  "Business",
+  "Mystery",
+  "Psychology"
+];
+
+// Helper to shuffle array immutably
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Balanced round-robin category allocator
+function getBalancedCategories(count: number, pool: string[]): string[] {
+  if (!pool || pool.length === 0) return Array(count).fill("General");
+  const result: string[] = [];
+  const fullCycles = Math.floor(count / pool.length);
+  const remainder = count % pool.length;
+
+  for (let c = 0; c < fullCycles; c++) {
+    result.push(...shuffleArray(pool));
+  }
+  if (remainder > 0) {
+    result.push(...shuffleArray(pool).slice(0, remainder));
+  }
+  return result;
+}
 
 export default function BookManagePage() {
   const [activeTab, setActiveTab] = useState<'books' | 'stripe'>('books');
@@ -83,7 +146,6 @@ export default function BookManagePage() {
   const [selectedCategory, setSelectedCategory] = useState("");
   const [selectedPriceFilter, setSelectedPriceFilter] = useState("");
 
-
   // Stripe Settings states
   const [stripeSettings, setStripeSettings] = useState<StripeSetting[]>([]);
   const [stripeLoading, setStripeLoading] = useState(false);
@@ -103,7 +165,15 @@ export default function BookManagePage() {
   const [randomPriceTarget, setRandomPriceTarget] = useState<'all' | 'selected'>('all');
   const [randomPriceProgress, setRandomPriceProgress] = useState({ current: 0, total: 0 });
 
-  // Form states
+  // Randomize Categories states (NEW FEATURE)
+  const [isRandomCategoryModalOpen, setIsRandomCategoryModalOpen] = useState(false);
+  const [randomCategoryTarget, setRandomCategoryTarget] = useState<'all' | 'selected'>('all');
+  const [randomCategoryPool, setRandomCategoryPool] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [randomCategoryMode, setRandomCategoryMode] = useState<'balanced' | 'pure_random'>('balanced');
+  const [randomCategoryProgress, setRandomCategoryProgress] = useState({ current: 0, total: 0 });
+  const [newCustomCategoryInput, setNewCustomCategoryInput] = useState("");
+
+  // Single Book Form states
   const [formData, setFormData] = useState({
     site_id: "bookbazaar",
     title: "",
@@ -122,9 +192,14 @@ export default function BookManagePage() {
   const [bulkBookFiles, setBulkBookFiles] = useState<File[]>([]);
   const [bulkCoverFiles, setBulkCoverFiles] = useState<File[]>([]);
   const [bulkAuthor, setBulkAuthor] = useState("Martin Chavez");
-  const [bulkCategory, setBulkCategory] = useState("Non-Fiction");
   const [bulkPrice, setBulkPrice] = useState("$12.00");
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 });
+  
+  // Bulk upload category distribution states
+  const [bulkCategoryMode, setBulkCategoryMode] = useState<'balanced_random' | 'single'>('balanced_random');
+  const [bulkSingleCategory, setBulkSingleCategory] = useState("Non-Fiction");
+  const [bulkCategoryPool, setBulkCategoryPool] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [bulkNewCategoryInput, setBulkNewCategoryInput] = useState("");
 
   useEffect(() => {
     fetchBooks();
@@ -168,7 +243,6 @@ export default function BookManagePage() {
     if (selectedSite === 'all') {
       return stripeSettings.find(s => s.is_active);
     }
-    // Find active for this specific site first, then active global
     return stripeSettings.find(s => s.site_id === selectedSite && s.is_active) || 
            stripeSettings.find(s => (s.site_id === 'all' || !s.site_id) && s.is_active);
   }, [stripeSettings, selectedSite]);
@@ -191,6 +265,15 @@ export default function BookManagePage() {
     return list.sort();
   }, [books]);
 
+  // Real-time balanced category preview for bulk upload
+  const assignedBulkCategories = useMemo(() => {
+    if (bulkCategoryMode === 'single') {
+      return bulkBookFiles.map(() => bulkSingleCategory || 'Non-Fiction');
+    }
+    const pool = bulkCategoryPool.length > 0 ? bulkCategoryPool : DEFAULT_CATEGORIES;
+    return getBalancedCategories(bulkBookFiles.length, pool);
+  }, [bulkBookFiles.length, bulkCategoryMode, bulkSingleCategory, bulkCategoryPool]);
+
   // Computed Filtered Books
   const filteredBooks = useMemo(() => {
     return books.filter((book) => {
@@ -212,7 +295,6 @@ export default function BookManagePage() {
   const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
 
   const handleDelete = async (id: string) => {
-
     if (!confirm("Are you sure you want to delete this book?")) return;
     try {
       await deleteBook(id);
@@ -325,17 +407,18 @@ export default function BookManagePage() {
       setEditingStripeSetting(null);
     } catch (error: any) {
       console.error("Failed to save Stripe account:", error);
-      alert(error.response?.data?.error || "Failed to save Stripe account configuration.");
+      alert(error.response?.data?.error || error.message || "Failed to save Stripe account configuration.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  // Direct Supabase Batch Random Prices (0 Vercel FOT)
   const handleBulkRandomizePricesSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     const rawLines = randomPriceInput.split('\n');
-    const prices = rawLines
+    const inputPrices = rawLines
       .map(line => line.trim().replace(/[^0-9.]/g, ''))
       .filter(val => val.length > 0)
       .map(val => {
@@ -344,7 +427,7 @@ export default function BookManagePage() {
       })
       .filter((val): val is string => val !== null);
 
-    if (prices.length === 0) {
+    if (inputPrices.length === 0) {
       alert("Please enter at least one valid price (e.g. 0.50, 0.99, 1.50)");
       return;
     }
@@ -362,19 +445,14 @@ export default function BookManagePage() {
     setRandomPriceProgress({ current: 0, total: targetBooks.length });
 
     try {
-      for (let i = 0; i < targetBooks.length; i++) {
-        setRandomPriceProgress({ current: i + 1, total: targetBooks.length });
-        const book = targetBooks[i];
-        const randomPrice = prices[Math.floor(Math.random() * prices.length)];
+      const updates = targetBooks.map(book => ({
+        id: book.id,
+        price: inputPrices[Math.floor(Math.random() * inputPrices.length)]
+      }));
 
-        await updateBook(book.id, {
-          site_id: book.site_id || selectedSite || 'bookbazaar',
-          title: book.title,
-          author: book.author,
-          category: book.category,
-          price: randomPrice
-        });
-      }
+      await batchUpdatePricesDirect(updates, (current, total) => {
+        setRandomPriceProgress({ current, total });
+      });
 
       await fetchBooks();
       setIsRandomPriceModalOpen(false);
@@ -388,9 +466,56 @@ export default function BookManagePage() {
     }
   };
 
+  // Direct Supabase Batch Random Categories (NEW FEATURE - 0 Vercel FOT)
+  const handleBulkRandomizeCategoriesSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (randomCategoryPool.length === 0) {
+      alert("Vui lòng chọn ít nhất 1 thể loại trong danh sách!");
+      return;
+    }
+
+    const targetBooks = randomCategoryTarget === 'selected' && selectedBookIds.length > 0
+      ? books.filter(b => selectedBookIds.includes(b.id))
+      : books;
+
+    if (targetBooks.length === 0) {
+      alert("Không có cuốn sách nào được chọn để cập nhật thể loại!");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setRandomCategoryProgress({ current: 0, total: targetBooks.length });
+
+    try {
+      const assigned = randomCategoryMode === 'balanced'
+        ? getBalancedCategories(targetBooks.length, randomCategoryPool)
+        : targetBooks.map(() => randomCategoryPool[Math.floor(Math.random() * randomCategoryPool.length)]);
+
+      const updates = targetBooks.map((b, idx) => ({
+        id: b.id,
+        category: assigned[idx]
+      }));
+
+      await batchUpdateCategoriesDirect(updates, (current, total) => {
+        setRandomCategoryProgress({ current, total });
+      });
+
+      await fetchBooks();
+      setIsRandomCategoryModalOpen(false);
+      alert(`Đã phân bổ thể loại thành công cho ${targetBooks.length} cuốn sách của ${currentStorefront?.name || 'trang web'}!`);
+    } catch (error) {
+      console.error("Bulk category randomization failed:", error);
+      alert("Cập nhật thể loại thất bại. Vui lòng kiểm tra console.");
+    } finally {
+      setIsSubmitting(false);
+      setRandomCategoryProgress({ current: 0, total: 0 });
+    }
+  };
+
   const handleActivateStripeSetting = async (id: string) => {
     try {
-      await activateStripeSetting(id);
+      await activateStripeSetting(id, selectedSite);
       await fetchStripeSettings();
     } catch (error) {
       alert("Failed to activate Stripe account");
@@ -439,27 +564,50 @@ export default function BookManagePage() {
     setIsModalOpen(false);
   };
 
+  // Direct Supabase Single Book Submit (0 Vercel FOT)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
     try {
-      const data = new FormData();
-      data.append("site_id", formData.site_id || (selectedSite !== 'all' ? selectedSite : 'bookbazaar'));
-      data.append("title", formData.title);
-      data.append("author", formData.author);
-      data.append("description", formData.description);
-      data.append("category", formData.category);
-      data.append("price", formData.price);
-      data.append("details", JSON.stringify({ Publisher: formData.publisher, Pages: formData.pages }));
-      
-      if (bookFile) data.append("file", bookFile);
-      if (coverImage) data.append("cover", coverImage);
+      let fileUrl = editingBook?.file_url || "";
+      let coverUrl = editingBook?.cover_url || "";
+
+      // 1. Direct Supabase Storage Uploads if files provided
+      if (bookFile) {
+        fileUrl = await uploadBookFileDirect(bookFile);
+      }
+      if (coverImage) {
+        coverUrl = await uploadCoverFileDirect(coverImage);
+      }
+
+      const targetSite = formData.site_id || (selectedSite !== 'all' ? selectedSite : 'bookbazaar');
+      const details = { Publisher: formData.publisher, Pages: formData.pages, site_id: targetSite };
 
       if (editingBook) {
-        await updateBook(editingBook.id, data);
+        await updateBookDirect(editingBook.id, {
+          site_id: targetSite,
+          title: formData.title,
+          author: formData.author,
+          description: formData.description,
+          category: formData.category,
+          price: formData.price,
+          details,
+          file_url: fileUrl,
+          cover_url: coverUrl
+        });
       } else {
-        await createBook(data);
+        await createBookDirect({
+          site_id: targetSite,
+          title: formData.title,
+          author: formData.author,
+          description: formData.description,
+          category: formData.category,
+          price: formData.price,
+          details,
+          file_url: fileUrl,
+          cover_url: coverUrl
+        });
       }
       
       await fetchBooks();
@@ -472,6 +620,7 @@ export default function BookManagePage() {
     }
   };
 
+  // Direct Supabase Bulk EPUB Submit with Balanced Category Distribution (0 Vercel FOT)
   const handleBulkSubmit = async () => {
     if (bulkBookFiles.length === 0) return;
     setIsSubmitting(true);
@@ -511,18 +660,27 @@ export default function BookManagePage() {
 
         const finalCover = manualCover || extractedCoverFile;
 
-        const data = new FormData();
-        data.append("site_id", targetSiteId);
-        data.append("title", title);
-        data.append("author", author);
-        data.append("description", description);
-        data.append("category", bulkCategory || "Non-Fiction");
-        data.append("price", bulkPrice || "$12.00");
-        data.append("details", JSON.stringify({ Publisher: "Signature Press", Pages: "120" }));
-        data.append("file", file);
-        if (finalCover) data.append("cover", finalCover);
+        // 1. Direct Supabase Storage Uploads (0 Vercel FOT)
+        const fileUrl = await uploadBookFileDirect(file);
+        let coverUrl = "";
+        if (finalCover) {
+          coverUrl = await uploadCoverFileDirect(finalCover);
+        }
 
-        await createBook(data);
+        const assignedCategory = assignedBulkCategories[i] || bulkSingleCategory || "Non-Fiction";
+
+        // 2. Direct Supabase Database Insert (0 Vercel FOT)
+        await createBookDirect({
+          site_id: targetSiteId,
+          title,
+          author,
+          description,
+          category: assignedCategory,
+          price: bulkPrice || "$12.00",
+          details: { Publisher: "Signature Press", Pages: "120", site_id: targetSiteId },
+          file_url: fileUrl,
+          cover_url: coverUrl
+        });
       }
 
       await fetchBooks();
@@ -532,7 +690,7 @@ export default function BookManagePage() {
       alert(`Đã upload thành công ${bulkBookFiles.length} cuốn sách lên website ${targetSiteId.toUpperCase()}!`);
     } catch (error: any) {
       console.error("Bulk upload failed:", error);
-      const errDetail = error.response?.data?.error || error.message || "Unknown error";
+      const errDetail = error.message || "Unknown error";
       alert(`Bulk upload failed at index ${bulkProgress.current}: ${errDetail}`);
     } finally {
       setIsSubmitting(false);
@@ -551,7 +709,6 @@ export default function BookManagePage() {
   }, [siteSearchTerm]);
 
   return (
-
     <div className="min-h-screen bg-slate-50 p-4 sm:p-8 font-sans text-slate-900">
       <div className="max-w-7xl mx-auto space-y-6">
         
@@ -566,9 +723,12 @@ export default function BookManagePage() {
                 <h1 className="text-2xl font-black text-slate-900 tracking-tight">
                   Book Management System
                 </h1>
+                <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  <Zap className="w-3 h-3 text-emerald-600" /> Direct Supabase (0 FOT)
+                </span>
               </div>
               <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-                Quản lý kho sách và cấu hình cổng thanh toán Stripe riêng biệt cho từng website.
+                Quản lý kho sách, tối ưu hóa tốc độ tải và cấu hình cổng thanh toán Stripe riêng biệt.
               </p>
             </div>
           </div>
@@ -599,184 +759,176 @@ export default function BookManagePage() {
                     </>
                   ) : (
                     <>
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full flex-shrink-0 shadow-xs" 
-                        style={{ backgroundColor: currentStorefront?.themeColor || '#4F46E5' }} 
-                      />
+                      <div 
+                        className="w-7 h-7 rounded-xl flex items-center justify-center text-white font-black text-xs flex-shrink-0 shadow-xs"
+                        style={{ backgroundColor: currentStorefront?.themeColor || '#4F46E5' }}
+                      >
+                        {currentStorefront?.name.substring(0, 2).toUpperCase() || 'WB'}
+                      </div>
                       <div className="text-left truncate">
                         <span className="font-bold text-slate-900 block text-xs sm:text-sm truncate">{currentStorefront?.name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono block truncate">{currentStorefront?.domain}</span>
+                        <span className="text-[10px] text-slate-400 font-normal block truncate">{currentStorefront?.domain}</span>
                       </div>
                     </>
                   )}
                 </div>
-
-                <ChevronDown className={`w-4 h-4 text-indigo-600 flex-shrink-0 transition-transform duration-200 ${isSiteDropdownOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-indigo-600 transition-transform duration-200 ${isSiteDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Searchable Dropdown Popover Menu */}
+              {/* Searchable Dropdown Popup Menu */}
               {isSiteDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-                  {/* Search input in dropdown */}
-                  <div className="p-3 border-b border-slate-100 bg-slate-50/70">
+                <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  {/* Search Input Box */}
+                  <div className="p-2.5 border-b border-slate-100 bg-slate-50/70">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                      <input 
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
                         type="text"
-                        placeholder="Tìm theo tên website hoặc domain..."
+                        autoFocus
+                        placeholder="Tìm tên website hoặc domain..."
                         value={siteSearchTerm}
                         onChange={(e) => setSiteSearchTerm(e.target.value)}
-                        autoFocus
-                        className="w-full pl-8 pr-7 py-2 text-xs rounded-xl border border-slate-200 bg-white font-medium text-slate-800 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
                       />
-                      {siteSearchTerm && (
-                        <button 
-                          onClick={() => setSiteSearchTerm("")}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
                     </div>
                   </div>
 
-                  {/* Dropdown Options List */}
-                  <div className="max-h-72 overflow-y-auto p-1.5 space-y-1">
-                    {/* All Sites Option */}
-                    {(!siteSearchTerm || 'tat ca all'.includes(siteSearchTerm.toLowerCase())) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedSite('all');
-                          setIsSiteDropdownOpen(false);
-                          setSiteSearchTerm("");
-                        }}
-                        className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left transition-colors cursor-pointer ${
-                          selectedSite === 'all' ? 'bg-indigo-50 text-indigo-950 font-bold' : 'hover:bg-slate-50 text-slate-700'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center flex-shrink-0">
-                            <Globe className="w-4 h-4" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-indigo-950">🌐 Tất cả {STOREFRONTS.length} Website</div>
-                            <div className="text-[10px] text-slate-400">Xem tổng hợp danh mục sách toàn hệ thống</div>
-                          </div>
+                  {/* Storefront List */}
+                  <div className="max-h-64 overflow-y-auto p-1.5 space-y-1">
+                    {/* Option: All Websites */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedSite('all');
+                        setIsSiteDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                        selectedSite === 'all' 
+                          ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
+                          : 'hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
+                          <Globe className="w-3.5 h-3.5" />
                         </div>
-                        {selectedSite === 'all' && (
-                          <Check className="w-4 h-4 text-indigo-600 flex-shrink-0" />
-                        )}
-                      </button>
-                    )}
-
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1.5">
-                      Danh sách {filteredStorefronts.length} Website
-                    </div>
-
-                    {filteredStorefronts.length === 0 ? (
-                      <div className="p-4 text-center text-xs text-slate-400">
-                        Không tìm thấy website nào khớp với "{siteSearchTerm}"
+                        <div>
+                          <div className="font-bold">🌐 Xem Tất Cả ({STOREFRONTS.length} Website)</div>
+                          <div className="text-[10px] text-slate-400">Xem và lọc toàn bộ sách hệ thống</div>
+                        </div>
                       </div>
-                    ) : (
-                      filteredStorefronts.map((site) => {
-                        const isSelected = selectedSite === site.id;
-                        return (
-                          <button
-                            key={site.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedSite(site.id);
-                              setIsSiteDropdownOpen(false);
-                              setSiteSearchTerm("");
-                            }}
-                            className={`w-full p-2.5 rounded-xl flex items-center justify-between text-left transition-colors cursor-pointer ${
-                              isSelected ? 'bg-indigo-50 text-indigo-950 font-bold' : 'hover:bg-slate-50 text-slate-700'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 truncate">
-                              <span 
-                                className="w-3.5 h-3.5 rounded-full flex-shrink-0 shadow-xs" 
-                                style={{ backgroundColor: site.themeColor }} 
-                              />
-                              <div className="truncate">
-                                <div className="text-xs font-bold text-slate-900 truncate flex items-center gap-1.5">
-                                  {site.name}
-                                </div>
-                                <div className="text-[10px] text-slate-400 font-mono truncate">
-                                  {site.domain}
-                                </div>
-                              </div>
+                      {selectedSite === 'all' && <Check className="w-4 h-4 text-indigo-600" />}
+                    </button>
+
+                    <div className="h-px bg-slate-100 my-1" />
+
+                    {/* Filtered Storefronts */}
+                    {filteredStorefronts.map((site) => {
+                      const isSelected = selectedSite === site.id;
+                      return (
+                        <button
+                          key={site.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSite(site.id);
+                            setIsSiteDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                            isSelected 
+                              ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
+                              : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate pr-2">
+                            <div 
+                              className="w-6 h-6 rounded-lg flex items-center justify-center text-white font-extrabold text-[10px] shadow-xs flex-shrink-0"
+                              style={{ backgroundColor: site.themeColor }}
+                            >
+                              {site.name.substring(0, 2).toUpperCase()}
                             </div>
-                            {isSelected && (
-                              <Check className="w-4 h-4 text-indigo-600 flex-shrink-0 ml-2" />
-                            )}
-                          </button>
-                        );
-                      })
+                            <div className="truncate">
+                              <div className="font-bold text-slate-800 truncate">{site.name}</div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">{site.domain}</div>
+                            </div>
+                          </div>
+                          {isSelected && <Check className="w-4 h-4 text-indigo-600 flex-shrink-0" />}
+                        </button>
+                      );
+                    })}
+
+                    {filteredStorefronts.length === 0 && (
+                      <div className="text-center py-4 text-xs text-slate-400">
+                        Không tìm thấy website nào phù hợp
+                      </div>
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* View Switcher: Books / Stripe */}
-            <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 self-end sm:self-auto mt-auto">
-              <button 
+            {/* Navigation Tabs */}
+            <div className="flex bg-slate-100 p-1 rounded-2xl self-end sm:self-center">
+              <button
                 onClick={() => setActiveTab('books')}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'books'
                     ? 'bg-white text-indigo-600 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <BookIcon className="w-4 h-4" />
+                <BookIcon className="w-3.5 h-3.5" />
                 Sách ({books.length})
               </button>
-              <button 
+              <button
                 onClick={() => setActiveTab('stripe')}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
                   activeTab === 'stripe'
                     ? 'bg-white text-indigo-600 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
+                    : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <CreditCard className="w-4 h-4" />
+                <CreditCard className="w-3.5 h-3.5" />
                 Stripe ({currentSiteStripeSettings.length})
               </button>
             </div>
           </div>
         </header>
 
-        {/* Current Selected Site Info Ribbon */}
-        <div className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 shadow-md">
+        {/* Current Active Storefront Banner */}
+        <div className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-md">
           <div className="flex items-center gap-3">
-            <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-            <span className="text-xs sm:text-sm font-bold">
-              Đang làm việc trên: <span className="text-indigo-300 font-extrabold text-sm sm:text-base">{selectedSite === 'all' ? 'Tất cả các website' : currentStorefront?.name}</span>
-              {currentStorefront?.domain && (
-                <span className="text-slate-400 font-mono text-xs ml-2">({currentStorefront.domain})</span>
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="text-xs text-slate-300 font-medium">Đang làm việc trên:</span>
+            <span className="text-sm font-bold text-white flex items-center gap-2">
+              {selectedSite === 'all' ? 'Tất Cả 11 Website' : currentStorefront?.name}
+              {selectedSite !== 'all' && currentStorefront?.domain && (
+                <span className="text-xs text-slate-400 font-normal">({currentStorefront.domain})</span>
               )}
             </span>
           </div>
-
-          <div className="flex items-center gap-4 text-xs text-slate-300">
-            <span>📚 Sách: <strong className="text-white">{books.length}</strong> cuốn</span>
-            <span>💳 Cổng Stripe: <strong className="text-white">{activeStripeSettingForSite ? activeStripeSettingForSite.account_name : 'Mặc định (.env)'}</strong></span>
+          <div className="flex items-center gap-4 text-xs">
+            <span className="text-slate-400">
+              📚 Sách: <strong className="text-white">{books.length} cuốn</strong>
+            </span>
+            <span className="text-slate-400">
+              💳 Cổng Stripe: <strong className={activeStripeSettingForSite ? "text-emerald-400" : "text-amber-400"}>
+                {activeStripeSettingForSite ? activeStripeSettingForSite.account_name : "Chưa cấu hình"}
+              </strong>
+            </span>
           </div>
         </div>
 
-
-        {activeTab === 'books' ? (
-          <>
-            {/* Action Buttons Header Bar */}
-            <div className="flex flex-wrap justify-between items-center gap-4">
-              <div className="flex flex-wrap gap-2.5">
+        {/* TAB 1: BOOKS MANAGEMENT */}
+        {activeTab === 'books' && (
+          <div className="space-y-4">
+            {/* Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div className="flex flex-wrap items-center gap-2">
                 {selectedBookIds.length > 0 && (
                   <button 
                     onClick={handleDeleteSelected}
                     disabled={isSubmitting}
-                    className="bg-rose-50 text-rose-600 border border-rose-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-100 transition-all text-xs disabled:opacity-50"
+                    className="bg-rose-50 text-rose-600 border border-rose-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-rose-100 transition-all text-xs"
                   >
                     <Trash2 className="w-4 h-4" />
                     Xóa Đã Chọn ({selectedBookIds.length})
@@ -796,20 +948,34 @@ export default function BookManagePage() {
               </div>
 
               <div className="flex flex-wrap gap-2.5">
+                {/* NEW FEATURE: Standalone Random Categories Button */}
+                <button 
+                  onClick={() => setIsRandomCategoryModalOpen(true)}
+                  className="bg-purple-50 text-purple-700 border border-purple-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-100 transition-all text-xs shadow-xs cursor-pointer"
+                >
+                  <Shuffle className="w-4 h-4 text-purple-600" />
+                  Random Thể Loại
+                </button>
+
+                {/* Random Prices Button */}
                 <button 
                   onClick={() => setIsRandomPriceModalOpen(true)}
-                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-100 transition-all text-xs"
+                  className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-100 transition-all text-xs shadow-xs cursor-pointer"
                 >
                   <Dices className="w-4 h-4 text-emerald-600" />
                   Random Giá Sách
                 </button>
+
+                {/* Bulk EPUB Upload Button */}
                 <button 
                   onClick={() => setIsBulkModalOpen(true)}
-                  className="bg-white text-indigo-600 border-2 border-indigo-600 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 transition-all text-xs"
+                  className="bg-white text-indigo-600 border-2 border-indigo-600 px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 transition-all text-xs cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Upload EPUB Hàng Loạt
                 </button>
+
+                {/* Single Book Add Button */}
                 <button 
                   onClick={() => {
                     setFormData({
@@ -818,7 +984,7 @@ export default function BookManagePage() {
                     });
                     setIsModalOpen(true);
                   }}
-                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 text-xs"
+                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 text-xs cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Thêm Sách Mới
@@ -849,7 +1015,7 @@ export default function BookManagePage() {
                     <select 
                       value={selectedAuthor} 
                       onChange={(e) => setSelectedAuthor(e.target.value)}
-                      className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer max-w-[140px] truncate"
+                      className="bg-transparent border-none focus:outline-none text-slate-700 font-medium text-xs cursor-pointer"
                     >
                       <option value="">Tất cả tác giả ({authors.length})</option>
                       {authors.map(author => (
@@ -860,11 +1026,11 @@ export default function BookManagePage() {
 
                   {/* Category Filter */}
                   <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
-                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <Tag className="w-3.5 h-3.5 text-slate-400" />
                     <select 
                       value={selectedCategory} 
                       onChange={(e) => setSelectedCategory(e.target.value)}
-                      className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer"
+                      className="bg-transparent border-none focus:outline-none text-slate-700 font-medium text-xs cursor-pointer"
                     >
                       <option value="">Tất cả thể loại ({categories.length})</option>
                       {categories.map(cat => (
@@ -873,50 +1039,43 @@ export default function BookManagePage() {
                     </select>
                   </div>
 
-
                   {/* Price Filter */}
                   <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
-                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <DollarSign className="w-3.5 h-3.5 text-slate-400" />
                     <select 
                       value={selectedPriceFilter} 
                       onChange={(e) => setSelectedPriceFilter(e.target.value)}
-                      className="bg-transparent outline-none font-medium text-slate-700 cursor-pointer"
+                      className="bg-transparent border-none focus:outline-none text-slate-700 font-medium text-xs cursor-pointer"
                     >
                       <option value="">Tất cả mức giá</option>
-                      <option value="under5">Dưới $5.00</option>
-                      <option value="5to10">$5.00 - $10.00</option>
-                      <option value="over10">Trên $10.00</option>
-                      <option value="priceAsc">Giá: Thấp đến Cao</option>
-                      <option value="priceDesc">Giá: Cao đến Thấp</option>
+                      {prices.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
                     </select>
                   </div>
 
-                  {/* Reset Filters */}
                   {isAnyFilterActive && (
                     <button 
                       onClick={clearFilters}
-                      className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium px-2 py-1 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors"
-                      title="Clear Filters"
+                      className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+                      title="Xóa bộ lọc"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Xóa Bộ Lọc
                     </button>
                   )}
-                </div>
 
-                <div className="text-xs text-slate-500 font-medium whitespace-nowrap">
-                  Hiển thị {filteredBooks.length} / {books.length} cuốn sách
+                  <div className="text-slate-400 text-xs font-semibold px-2">
+                    Hiển thị {filteredBooks.length} / {books.length} cuốn sách
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Book List Table */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              {/* Books Table */}
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
+                <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-bold border-b border-slate-100">
-                      <th className="w-12 px-4 py-4 text-center">
+                    <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      <th className="w-12 px-4 py-3.5 text-center">
                         <input 
                           type="checkbox"
                           checked={isAllSelected}
@@ -924,49 +1083,41 @@ export default function BookManagePage() {
                           className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                         />
                       </th>
-                      <th className="px-6 py-4">Chi tiết sách</th>
-                      <th className="px-6 py-4">Website</th>
-                      <th className="px-6 py-4">Thể loại</th>
-                      <th className="px-6 py-4">Giá bán</th>
-                      <th className="px-6 py-4">Files</th>
-                      <th className="px-6 py-4 text-right">Thao tác</th>
+                      <th className="px-6 py-3.5">Chi Tiết Sách</th>
+                      <th className="px-6 py-3.5">Website</th>
+                      <th className="px-6 py-3.5">Thể Loại</th>
+                      <th className="px-6 py-3.5">Giá Bán</th>
+                      <th className="px-6 py-3.5">Files</th>
+                      <th className="px-6 py-3.5 text-right">Thao Tác</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 text-xs">
                     {loading ? (
                       <tr>
-                        <td colSpan={7} className="py-20 text-center">
-                          <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
-                          <span className="text-slate-400">Đang tải danh sách sách của {selectedSite === 'all' ? 'tất cả website' : currentStorefront?.name}...</span>
+                        <td colSpan={7} className="py-20 text-center text-slate-400">
+                          <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-600 mb-2" />
+                          <span>Đang tải danh sách sách từ Supabase...</span>
                         </td>
                       </tr>
                     ) : filteredBooks.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-20 text-center space-y-3">
-                          <BookIcon className="w-10 h-10 text-slate-300 mx-auto" />
-                          <p className="text-slate-500 font-bold">Chưa có cuốn sách nào trên website này.</p>
-                          <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                            Bấm "+ Thêm Sách Mới" hoặc "Upload EPUB Hàng Loạt" để đăng tải sách cho {currentStorefront?.name || 'website này'}!
+                        <td colSpan={7} className="py-20 text-center text-slate-400">
+                          <BookIcon className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                          <p className="font-bold text-slate-600 text-sm">Chưa có cuốn sách nào trên website này.</p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Bấm &quot;+ Thêm Sách Mới&quot; hoặc &quot;Upload EPUB Hàng Loạt&quot; để đăng tải sách cho {currentStorefront?.name || 'website này'}!
                           </p>
-                          {isAnyFilterActive && (
-                            <button 
-                              onClick={clearFilters}
-                              className="mt-2 text-xs text-indigo-600 font-bold hover:underline"
-                            >
-                              Xóa toàn bộ bộ lọc
-                            </button>
-                          )}
                         </td>
                       </tr>
                     ) : (
                       filteredBooks.map((book) => {
                         const isSelected = selectedBookIds.includes(book.id);
-                        const bookSite = STOREFRONTS.find(s => s.id === (book.site_id || 'bookbazaar'));
+                        const bookSite = STOREFRONTS.find(s => s.id === book.site_id);
 
                         return (
                           <tr 
                             key={book.id} 
-                            className={`transition-colors group ${isSelected ? 'bg-indigo-50/40' : 'hover:bg-slate-50/50'}`}
+                            className={`hover:bg-slate-50/80 transition-colors ${isSelected ? 'bg-indigo-50/40' : ''}`}
                           >
                             <td className="w-12 px-4 py-4 text-center">
                               <input 
@@ -1019,26 +1170,21 @@ export default function BookManagePage() {
                                 ) : (
                                   <span className="text-slate-300 text-xs">No file</span>
                                 )}
-                                {book.cover_url && (
-                                   <a href={book.cover_url} target="_blank" className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-indigo-100 hover:text-indigo-600 transition-colors" title="View Cover">
-                                     <ExternalLink className="w-4 h-4" />
-                                   </a>
-                                )}
                               </div>
                             </td>
                             <td className="px-6 py-4 text-right">
-                              <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="flex items-center justify-end gap-2">
                                 <button 
                                   onClick={() => handleEdit(book)}
                                   className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                  title="Edit book"
+                                  title="Edit Book"
                                 >
                                   <Edit2 className="w-4 h-4" />
                                 </button>
                                 <button 
                                   onClick={() => handleDelete(book.id)}
                                   className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                                  title="Delete book"
+                                  title="Delete Book"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -1052,164 +1198,114 @@ export default function BookManagePage() {
                 </table>
               </div>
             </div>
-          </>
-        ) : (
-          /* STRIPE CONFIGURATION TAB */
-          <div className="space-y-8">
-            
-            {/* Active Stripe Gateway Banner for Selected Site */}
-            <div className="bg-gradient-to-r from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 relative z-10">
-                <div className="space-y-2">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/20 text-emerald-300 text-xs font-bold rounded-full border border-emerald-500/30">
-                    <Zap className="w-3.5 h-3.5" /> Cổng Thanh Toán Stripe Riêng
-                  </div>
-                  <h2 className="text-xl sm:text-2xl font-bold">
-                    Cấu hình Stripe cho {selectedSite === 'all' ? 'Tất cả các website' : currentStorefront?.name}
-                  </h2>
-                  <p className="text-slate-300 text-xs sm:text-sm max-w-2xl">
-                    Mỗi trang web có thể cấu hình tài khoản Stripe riêng để nhận tiền trực tiếp. Khách hàng thanh toán trên website nào sẽ vào đúng tài khoản Stripe của website đó.
-                  </p>
-                </div>
-                <button 
-                  onClick={handleStartAddStripeSetting}
-                  className="bg-indigo-500 hover:bg-indigo-600 text-white font-bold px-6 py-3 rounded-2xl flex items-center gap-2 shadow-lg shadow-indigo-500/30 transition-all text-xs sm:text-sm whitespace-nowrap"
-                >
-                  <Plus className="w-4 h-4" />
-                  Thêm Cổng Stripe Mới
-                </button>
-              </div>
+          </div>
+        )}
 
-              {activeStripeSettingForSite ? (
-                <div className="mt-6 pt-5 border-t border-white/10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white/5 p-4 rounded-2xl">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 flex-shrink-0">
-                      <ShieldCheck className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <div className="text-[11px] text-slate-400 font-medium uppercase tracking-wider">Cổng nhận tiền đang kích hoạt:</div>
-                      <div className="text-base sm:text-lg font-bold text-emerald-300 flex items-center gap-2">
-                        {activeStripeSettingForSite.account_name}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-300 font-mono bg-black/30 px-3 py-1.5 rounded-lg border border-white/10">
-                    Secret Key: {activeStripeSettingForSite.secret_key.slice(0, 10)}••••••••
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-6 pt-5 border-t border-white/10 text-xs text-amber-300 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                  Chưa có tài khoản Stripe riêng được kích hoạt cho website này. Hệ thống đang nhận qua tài khoản mặc định (.env).
-                </div>
-              )}
+        {/* TAB 2: STRIPE CONFIGURATION */}
+        {activeTab === 'stripe' && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <div>
+                <h2 className="text-sm font-bold text-slate-800">
+                  Cấu hình cổng thanh toán Stripe
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Mỗi website có thể được gán một tài khoản Stripe riêng để nhận thanh toán độc lập.
+                </p>
+              </div>
+              <button 
+                onClick={handleStartAddStripeSetting}
+                className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 text-xs cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                Thêm Cổng Stripe Mới
+              </button>
             </div>
 
-            {/* Accounts Table for Current Site */}
+            {/* Stripe Accounts Table */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-                <h3 className="font-bold text-slate-800 flex items-center gap-2 text-base">
-                  <CreditCard className="w-5 h-5 text-indigo-600" />
-                  Danh Sách Tài Khoản Stripe ({currentSiteStripeSettings.length})
-                </h3>
-              </div>
-
               <div className="overflow-x-auto">
-                <table className="w-full text-left">
+                <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50/50 text-slate-500 text-xs uppercase tracking-wider font-bold border-b border-slate-100">
-                      <th className="px-6 py-4">Website Áp Dụng</th>
-                      <th className="px-6 py-4">Tên Tài Khoản</th>
-                      <th className="px-6 py-4">Publishable Key</th>
-                      <th className="px-6 py-4">Secret Key</th>
-                      <th className="px-6 py-4">Trạng Thái</th>
-                      <th className="px-6 py-4 text-right">Thao Tác</th>
+                    <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      <th className="px-6 py-3.5">Tên Cổng / Gợi Nhớ</th>
+                      <th className="px-6 py-3.5">Áp Dụng Cho Website</th>
+                      <th className="px-6 py-3.5">Publishable Key</th>
+                      <th className="px-6 py-3.5">Trạng Thái</th>
+                      <th className="px-6 py-3.5 text-right">Thao Tác</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 text-xs">
                     {stripeLoading ? (
                       <tr>
-                        <td colSpan={6} className="py-16 text-center">
-                          <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-500 mb-2" />
-                          <span className="text-slate-400">Đang tải danh sách Stripe...</span>
+                        <td colSpan={5} className="py-20 text-center text-slate-400">
+                          <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-600 mb-2" />
+                          <span>Đang tải cấu hình Stripe...</span>
                         </td>
                       </tr>
                     ) : currentSiteStripeSettings.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-16 text-center">
-                          <CreditCard className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                          <p className="text-slate-500 font-bold">Chưa có tài khoản Stripe nào cho website này.</p>
-                          <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                            Bấm "+ Thêm Cổng Stripe Mới" ở trên để nhập Publishable & Secret key của website {currentStorefront?.name || 'này'}!
-                          </p>
+                        <td colSpan={5} className="py-16 text-center text-slate-400">
+                          <CreditCard className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                          <p className="font-bold text-slate-600">Chưa có cấu hình Stripe nào cho website này.</p>
+                          <p className="text-xs text-slate-400 mt-1">Bấm &quot;Thêm Cổng Stripe Mới&quot; để thiết lập nhận thanh toán!</p>
                         </td>
                       </tr>
                     ) : (
                       currentSiteStripeSettings.map((setting) => {
-                        const targetSite = STOREFRONTS.find(s => s.id === (setting.site_id || 'bookbazaar'));
-
+                        const siteObj = STOREFRONTS.find(s => s.id === setting.site_id);
                         return (
-                          <tr key={setting.id} className={`hover:bg-slate-50/60 transition-colors ${setting.is_active ? 'bg-emerald-50/30' : ''}`}>
+                          <tr key={setting.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="px-6 py-4">
-                              {targetSite ? (
-                                <span className={`px-2.5 py-1 text-[10px] font-black rounded-md border ${targetSite.badgeBg} ${targetSite.badgeText}`}>
-                                  {targetSite.name}
+                              <div className="font-bold text-slate-800">{setting.account_name}</div>
+                              <div className="text-[11px] text-slate-400">ID: {setting.id.substring(0, 8)}...</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              {siteObj ? (
+                                <span className={`px-2.5 py-1 text-[10px] font-extrabold rounded-md border ${siteObj.badgeBg} ${siteObj.badgeText}`}>
+                                  {siteObj.name}
                                 </span>
                               ) : (
                                 <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
-                                  🌐 Chung (Tất cả)
+                                  🌐 Chung Cho Tất Cả
                                 </span>
                               )}
                             </td>
-                            <td className="px-6 py-4">
-                              <div className="font-bold text-slate-800 flex items-center gap-2">
-                                {setting.account_name}
-                                {setting.is_active && (
-                                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">
-                                    ĐANG DÙNG
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                                {setting.publishable_key ? `${setting.publishable_key.slice(0, 16)}...` : 'N/A'}
-                              </code>
-                            </td>
-                            <td className="px-6 py-4">
-                              <code className="text-xs font-mono text-slate-600 bg-slate-100 px-2 py-1 rounded">
-                                {setting.secret_key.slice(0, 10)}••••••••
-                              </code>
+                            <td className="px-6 py-4 font-mono text-[11px] text-slate-600">
+                              {setting.publishable_key ? `${setting.publishable_key.substring(0, 14)}...` : 'Chưa nhập PK'}
                             </td>
                             <td className="px-6 py-4">
                               {setting.is_active ? (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600">
-                                  <CheckCircle2 className="w-4 h-4" /> Đang nhận thanh toán
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 text-xs font-bold rounded-full border border-emerald-200">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                  Đang Hoạt Động
                                 </span>
                               ) : (
-                                <span className="text-xs font-medium text-slate-400">Tắt</span>
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-500 text-xs font-bold rounded-full">
+                                  Chưa Kích Hoạt
+                                </span>
                               )}
                             </td>
                             <td className="px-6 py-4 text-right">
-                              <div className="flex justify-end items-center gap-2">
+                              <div className="flex items-center justify-end gap-2">
                                 {!setting.is_active && (
-                                  <button 
+                                  <button
                                     onClick={() => handleActivateStripeSetting(setting.id)}
-                                    className="px-3 py-1.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1 border border-indigo-200"
+                                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg font-bold text-xs hover:bg-emerald-700 transition-all flex items-center gap-1 cursor-pointer"
                                   >
                                     <Check className="w-3.5 h-3.5" /> Kích Hoạt
                                   </button>
                                 )}
                                 <button 
                                   onClick={() => handleStartEditStripeSetting(setting)}
-                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
                                   title="Edit Configuration"
                                 >
                                   <Edit2 className="w-4 h-4" />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteStripeSetting(setting.id)}
-                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
                                   title="Delete Configuration"
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -1339,10 +1435,10 @@ export default function BookManagePage() {
         </div>
       )}
 
-      {/* Bulk Archival Modal */}
+      {/* Bulk EPUB Upload Modal with Balanced Category Randomization */}
       {isBulkModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[92vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
               <div>
                 <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -1358,13 +1454,19 @@ export default function BookManagePage() {
               </button>
             </div>
 
-            <div className="p-8 space-y-6">
+            <div className="p-6 md:p-8 space-y-5 overflow-y-auto flex-1">
               {/* Batch Metadata Settings */}
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Thông tin mặc định đính kèm</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Thông tin mặc định đính kèm</h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    ⚡ Upload trực tiếp Supabase
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Tác giả</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Tác giả mặc định</label>
                     <input 
                       type="text" 
                       placeholder="e.g. Martin Chavez"
@@ -1374,21 +1476,7 @@ export default function BookManagePage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Thể loại</label>
-                    <select 
-                      value={bulkCategory}
-                      onChange={(e) => setBulkCategory(e.target.value)}
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-medium text-slate-800"
-                    >
-                      <option value="Non-Fiction">Non-Fiction</option>
-                      <option value="Fiction">Fiction</option>
-                      <option value="Philosophy">Philosophy</option>
-                      <option value="Classic">Classic</option>
-                      <option value="Poetry">Poetry</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Giá bán</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Giá bán mặc định</label>
                     <input 
                       type="text" 
                       placeholder="$12.00"
@@ -1398,9 +1486,118 @@ export default function BookManagePage() {
                     />
                   </div>
                 </div>
+
+                {/* CATEGORY DISTRIBUTION SELECTOR (NEW FEATURE) */}
+                <div className="pt-2 border-t border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                      Chế độ gán Thể loại:
+                    </label>
+                    <div className="flex bg-slate-200/70 p-1 rounded-xl gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setBulkCategoryMode('balanced_random')}
+                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 ${
+                          bulkCategoryMode === 'balanced_random'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <Shuffle className="w-3 h-3" />
+                        🎲 Phân bổ đều / Random
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBulkCategoryMode('single')}
+                        className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                          bulkCategoryMode === 'single'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Cố định 1 thể loại
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Mode 1: Single Category */}
+                  {bulkCategoryMode === 'single' && (
+                    <div>
+                      <select 
+                        value={bulkSingleCategory}
+                        onChange={(e) => setBulkSingleCategory(e.target.value)}
+                        className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white font-bold text-indigo-950"
+                      >
+                        {DEFAULT_CATEGORIES.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Mode 2: Balanced Random Category Pool */}
+                  {bulkCategoryMode === 'balanced_random' && (
+                    <div className="space-y-2 bg-indigo-50/50 p-3.5 rounded-2xl border border-indigo-100">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-indigo-900">
+                          Kho thể loại ngẫu nhiên ({bulkCategoryPool.length} thể loại được chọn):
+                        </span>
+                        <div className="flex gap-2 text-[10px]">
+                          <button
+                            type="button"
+                            onClick={() => setBulkCategoryPool(DEFAULT_CATEGORIES)}
+                            className="text-indigo-600 hover:underline font-bold"
+                          >
+                            Chọn tất cả
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBulkCategoryPool([])}
+                            className="text-slate-400 hover:underline"
+                          >
+                            Bỏ chọn
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Chips */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {DEFAULT_CATEGORIES.map(cat => {
+                          const isSelected = bulkCategoryPool.includes(cat);
+                          return (
+                            <button
+                              key={cat}
+                              type="button"
+                              onClick={() => {
+                                if (isSelected) {
+                                  setBulkCategoryPool(bulkCategoryPool.filter(c => c !== cat));
+                                } else {
+                                  setBulkCategoryPool([...bulkCategoryPool, cat]);
+                                }
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-600 text-white shadow-xs'
+                                  : 'bg-white text-slate-600 border border-slate-200 hover:border-indigo-300'
+                              }`}
+                            >
+                              {isSelected ? <CheckSquare className="w-3 h-3" /> : <Square className="w-3 h-3 text-slate-300" />}
+                              {cat}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <p className="text-[10px] text-indigo-600 font-medium">
+                        💡 Thuật toán Balanced Round-Robin: Khi tải lên {bulkBookFiles.length || 0} file, các thể loại đã chọn sẽ được chia đều tỷ lệ 1:1 một cách ngẫu nhiên.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-3">
                   <label className="block text-xs font-bold text-slate-700">1. Chọn các file EPUB/PDF ({bulkBookFiles.length})</label>
                   <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:border-indigo-400 transition-colors relative bg-white">
@@ -1415,22 +1612,31 @@ export default function BookManagePage() {
                     <p className="text-xs text-slate-600 font-bold">Kéo thả file EPUB vào đây</p>
                     <p className="text-[10px] text-slate-400 mt-1">Ảnh bìa & mô tả sẽ được tự động trích xuất!</p>
                   </div>
-                  <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
+
+                  {/* File List with Assigned Category Preview */}
+                  <div className="max-h-48 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-1">
                     {bulkBookFiles.map((f, idx) => {
                       const cleanedName = f.name.replace(/\.[^/.]+$/, "").replace(/^[\d\s.\-_]+/, "").replace(/_/g, " ").trim();
+                      const categoryForThisFile = assignedBulkCategories[idx] || "Non-Fiction";
+
                       return (
-                        <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
+                        <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                           <div className="truncate flex-grow pr-2">
-                            <span className="font-medium text-slate-700">{cleanedName}</span>
-                            {f.name.toLowerCase().endsWith(".epub") && (
-                              <span className="ml-2 text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">
-                                Auto Cover
+                            <div className="font-bold text-slate-800 truncate">{cleanedName}</div>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-[9px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-extrabold flex items-center gap-1">
+                                <Tag className="w-2.5 h-2.5" /> {categoryForThisFile}
                               </span>
-                            )}
+                              {f.name.toLowerCase().endsWith(".epub") && (
+                                <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">
+                                  Auto Cover
+                                </span>
+                              )}
+                            </div>
                           </div>
                           <button 
                             onClick={() => setBulkBookFiles(bulkBookFiles.filter((_, i) => i !== idx))}
-                            className="text-slate-300 hover:text-rose-500 transition-colors ml-2"
+                            className="text-slate-300 hover:text-rose-500 transition-colors ml-2 p-1"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
@@ -1454,13 +1660,13 @@ export default function BookManagePage() {
                     <p className="text-xs text-slate-400 font-medium">Kéo thả ảnh bìa (nếu có)</p>
                     <p className="text-[10px] text-slate-400 mt-1">Để trống nếu muốn dùng ảnh bìa sẵn có trong EPUB</p>
                   </div>
-                  <div className="max-h-32 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-2">
+                  <div className="max-h-48 overflow-y-auto text-[11px] text-slate-500 space-y-1.5 pr-1">
                     {bulkCoverFiles.map((f, idx) => (
                       <div key={f.name + idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100">
                         <span className="truncate flex-grow">{f.name}</span>
                         <button 
                           onClick={() => setBulkCoverFiles(bulkCoverFiles.filter((_, i) => i !== idx))}
-                          className="text-slate-300 hover:text-rose-500 transition-colors ml-2"
+                          className="text-slate-300 hover:text-rose-500 transition-colors ml-2 p-1"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
@@ -1471,12 +1677,12 @@ export default function BookManagePage() {
               </div>
 
               {isSubmitting && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs font-bold text-indigo-600 uppercase tracking-widest">
-                    <span>Đang tải lên kho sách...</span>
+                <div className="space-y-2 bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                  <div className="flex justify-between text-xs font-bold text-indigo-700 uppercase tracking-widest">
+                    <span>Đang upload trực tiếp lên Supabase...</span>
                     <span>{bulkProgress.current} / {bulkProgress.total}</span>
                   </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                  <div className="w-full bg-indigo-200 h-2.5 rounded-full overflow-hidden">
                     <div 
                       className="bg-indigo-600 h-full transition-all duration-300" 
                       style={{ width: `${(bulkProgress.current / bulkProgress.total) * 100}%` }}
@@ -1484,24 +1690,194 @@ export default function BookManagePage() {
                   </div>
                 </div>
               )}
+            </div>
 
-              <div className="pt-4 flex gap-4">
+            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-4">
+              <button 
+                onClick={() => setIsBulkModalOpen(false)}
+                className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-100 transition-all text-xs"
+              >
+                Hủy
+              </button>
+              <button 
+                disabled={isSubmitting || bulkBookFiles.length === 0}
+                onClick={handleBulkSubmit}
+                className="flex-2 px-10 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs cursor-pointer"
+              >
+                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                Bắt Đầu Đăng {bulkBookFiles.length} Cuốn Sách
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Standalone Randomize Categories Modal (NEW FEATURE) */}
+      {isRandomCategoryModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <Shuffle className="w-6 h-6 text-purple-600" />
+                Random Thể Loại Cho {selectedSite === 'all' ? 'Tất cả website' : currentStorefront?.name}
+              </h2>
+              <button 
+                onClick={() => setIsRandomCategoryModalOpen(false)} 
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkRandomizeCategoriesSubmit} className="p-8 space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Chọn các thể loại trong tập hợp phân bổ:
+                </label>
+                <p className="text-[11px] text-slate-500 mb-3">
+                  Hệ thống sẽ tự động phân bổ đều các thể loại này cho danh sách sách mục tiêu.
+                </p>
+
+                <div className="flex flex-wrap gap-1.5 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                  {DEFAULT_CATEGORIES.map(cat => {
+                    const isSelected = randomCategoryPool.includes(cat);
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setRandomCategoryPool(randomCategoryPool.filter(c => c !== cat));
+                          } else {
+                            setRandomCategoryPool([...randomCategoryPool, cat]);
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                          isSelected
+                            ? 'bg-purple-600 text-white shadow-xs'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:border-purple-300'
+                        }`}
+                      >
+                        {isSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5 text-slate-300" />}
+                        {cat}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Phương Thức Phân Bổ:</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
+                    randomCategoryMode === 'balanced' ? 'border-purple-500 bg-purple-50/40 text-purple-900 font-bold' : 'border-slate-200 text-slate-600'
+                  }`}>
+                    <input 
+                      type="radio" 
+                      name="catMode" 
+                      checked={randomCategoryMode === 'balanced'} 
+                      onChange={() => setRandomCategoryMode('balanced')}
+                      className="w-4 h-4 text-purple-600"
+                    />
+                    <div>
+                      <span className="text-xs block">Phân bổ đều 1:1</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Cân bằng số lượng sách</span>
+                    </div>
+                  </label>
+
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
+                    randomCategoryMode === 'pure_random' ? 'border-purple-500 bg-purple-50/40 text-purple-900 font-bold' : 'border-slate-200 text-slate-600'
+                  }`}>
+                    <input 
+                      type="radio" 
+                      name="catMode" 
+                      checked={randomCategoryMode === 'pure_random'} 
+                      onChange={() => setRandomCategoryMode('pure_random')}
+                      className="w-4 h-4 text-purple-600"
+                    />
+                    <div>
+                      <span className="text-xs block">Ngẫu nhiên tự do</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Random hoàn toàn</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Áp Dụng Cho:</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
+                    randomCategoryTarget === 'all' ? 'border-purple-500 bg-purple-50/40 text-purple-900 font-bold' : 'border-slate-200 text-slate-600'
+                  }`}>
+                    <input 
+                      type="radio" 
+                      name="catTarget" 
+                      checked={randomCategoryTarget === 'all'} 
+                      onChange={() => setRandomCategoryTarget('all')}
+                      className="w-4 h-4 text-purple-600"
+                    />
+                    <span className="text-xs">Tất cả sách ({books.length} cuốn)</span>
+                  </label>
+
+                  <label className={`p-3.5 rounded-2xl border-2 flex items-center gap-2.5 cursor-pointer transition-all ${
+                    selectedBookIds.length === 0 ? 'opacity-50 pointer-events-none border-slate-200' :
+                    randomCategoryTarget === 'selected' ? 'border-purple-500 bg-purple-50/40 text-purple-900 font-bold' : 'border-slate-200 text-slate-600'
+                  }`}>
+                    <input 
+                      type="radio" 
+                      name="catTarget" 
+                      disabled={selectedBookIds.length === 0}
+                      checked={randomCategoryTarget === 'selected'} 
+                      onChange={() => setRandomCategoryTarget('selected')}
+                      className="w-4 h-4 text-purple-600"
+                    />
+                    <span className="text-xs">Sách đã chọn ({selectedBookIds.length} cuốn)</span>
+                  </label>
+                </div>
+              </div>
+
+              {randomCategoryProgress.total > 0 && (
+                <div className="bg-purple-50 p-3.5 rounded-2xl border border-purple-200 space-y-1.5">
+                  <div className="flex justify-between text-xs font-bold text-purple-800">
+                    <span>Đang cập nhật thể loại trực tiếp trên Supabase...</span>
+                    <span>{randomCategoryProgress.current} / {randomCategoryProgress.total}</span>
+                  </div>
+                  <div className="w-full bg-purple-200 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className="bg-purple-600 h-full transition-all duration-200" 
+                      style={{ width: `${(randomCategoryProgress.current / randomCategoryProgress.total) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 flex gap-4 border-t border-slate-100">
                 <button 
-                  onClick={() => setIsBulkModalOpen(false)}
-                  className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
+                  type="button" 
+                  onClick={() => setIsRandomCategoryModalOpen(false)}
+                  className="flex-1 px-6 py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
                 >
                   Hủy
                 </button>
                 <button 
-                  disabled={isSubmitting || bulkBookFiles.length === 0}
-                  onClick={handleBulkSubmit}
-                  className="flex-2 px-10 py-3.5 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
+                  disabled={isSubmitting || randomCategoryPool.length === 0}
+                  type="submit" 
+                  className="flex-2 px-8 py-3 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 transition-all shadow-md shadow-purple-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs cursor-pointer"
                 >
-                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Bắt Đầu Đăng Sách
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Đang Phân Bổ...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Shuffle className="w-4 h-4" />
+                      <span>Phân Bổ Thể Loại</span>
+                    </>
+                  )}
                 </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
       )}
@@ -1568,11 +1944,9 @@ export default function BookManagePage() {
                     onChange={(e) => setFormData({...formData, category: e.target.value})}
                   >
                     <option value="">Chọn Thể Loại</option>
-                    <option value="Fiction">Fiction</option>
-                    <option value="Non-Fiction">Non-Fiction</option>
-                    <option value="Philosophy">Philosophy</option>
-                    <option value="Classic">Classic</option>
-                    <option value="Poetry">Poetry</option>
+                    {DEFAULT_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="col-span-1">
@@ -1642,7 +2016,7 @@ export default function BookManagePage() {
                 <button 
                   disabled={isSubmitting}
                   type="submit" 
-                  className="flex-2 px-10 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
+                  className="flex-2 px-10 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs cursor-pointer"
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                   {editingBook ? "Lưu Thay Đổi" : "Lưu Sách Mới"}
@@ -1678,7 +2052,7 @@ export default function BookManagePage() {
                 <p className="text-[11px] text-slate-500 mb-2">
                   Nhập các mức giá ngăn cách bằng Enter. Hệ thống sẽ bốc ngẫu nhiên một giá từ danh sách này để gán cho từng cuốn sách!
                 </p>
-                <textarea
+                <textarea 
                   required
                   rows={5}
                   value={randomPriceInput}
@@ -1728,7 +2102,7 @@ export default function BookManagePage() {
               {randomPriceProgress.total > 0 && (
                 <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 space-y-1.5">
                   <div className="flex justify-between text-xs font-bold text-emerald-800">
-                    <span>Đang cập nhật giá...</span>
+                    <span>Đang cập nhật giá trực tiếp trên Supabase...</span>
                     <span>{randomPriceProgress.current} / {randomPriceProgress.total}</span>
                   </div>
                   <div className="w-full bg-emerald-200 rounded-full h-2 overflow-hidden">
@@ -1751,7 +2125,7 @@ export default function BookManagePage() {
                 <button 
                   disabled={isSubmitting}
                   type="submit" 
-                  className="flex-2 px-8 py-3 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
+                  className="flex-2 px-8 py-3 rounded-xl bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all shadow-md shadow-emerald-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs cursor-pointer"
                 >
                   {isSubmitting ? (
                     <>

@@ -1,4 +1,17 @@
 import axios from 'axios';
+import {
+  fetchBooksDirect,
+  createBookDirect,
+  updateBookDirect,
+  deleteBookDirect,
+  deleteBatchBooksDirect,
+  deleteAllBooksDirect,
+  fetchStripeSettingsDirect,
+  addStripeSettingDirect,
+  updateStripeSettingDirect,
+  activateStripeSettingDirect,
+  deleteStripeSettingDirect,
+} from './supabase';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
   (process.env.NODE_ENV === 'development' ? 'http://localhost:5000/api' : 'https://logbook-snowy-gamma.vercel.app/api');
@@ -56,34 +69,119 @@ export const STOREFRONTS: StorefrontSite[] = [
   { id: 'bookpatr', code: 'bookpatr', name: 'BookPatr', domain: 'www.logicnode.ink', themeColor: '#E11D48', badgeBg: 'bg-rose-50 border-rose-200', badgeText: 'text-rose-800', description: 'Artisanal Literature & eBook Market' },
 ];
 
-export const getBooks = (site?: string) => {
-  const params = site && site !== 'all' ? { site } : {};
-  return api.get<Book[]>('/books', { params });
+// Direct Supabase calls with Axios fallback (Zero Vercel Fast Origin Transfer)
+export const getBooks = async (site?: string) => {
+  try {
+    const data = await fetchBooksDirect(site);
+    return { data };
+  } catch (err) {
+    console.warn('Direct fetch failed, falling back to API:', err);
+    const params = site && site !== 'all' ? { site } : {};
+    return api.get<Book[]>('/books', { params });
+  }
 };
 
-export const getBook = (id: string) => api.get<Book>(`/books/${id}`);
-
-export const createBook = (formData: FormData) => api.post<Book>('/books', formData);
-
-export const updateBook = (id: string, data: FormData | Partial<Book>) => api.put<Book>(`/books/${id}`, data);
-
-
-export const deleteBook = (id: string) => api.delete(`/books/${id}`);
-export const deleteBatchBooks = (ids: string[]) => api.post('/books/delete-batch', { ids });
-export const deleteAllBooks = (site?: string) => {
-  const params = site && site !== 'all' ? { site } : {};
-  return api.delete('/books/all/truncate', { params });
+export const getBook = async (id: string) => {
+  return api.get<Book>(`/books/${id}`);
 };
 
-export const getStripeSettings = (site?: string) => {
-  const params = site && site !== 'all' ? { site } : {};
-  return api.get<StripeSetting[]>('/checkout/stripe-settings', { params });
+export const createBook = async (formData: FormData | any) => {
+  if (formData instanceof FormData) {
+    // If sent as FormData without prior upload, fallback to api
+    return api.post<Book>('/books', formData);
+  }
+  const data = await createBookDirect(formData);
+  return { data };
 };
 
-export const addStripeSetting = (data: { site_id?: string; account_name: string; publishable_key?: string; secret_key: string; is_active?: boolean }) => 
-  api.post<StripeSetting>('/checkout/stripe-settings', data);
+export const updateBook = async (id: string, data: FormData | Partial<Book>) => {
+  if (data instanceof FormData) {
+    return api.put<Book>(`/books/${id}`, data);
+  }
+  try {
+    const res = await updateBookDirect(id, data as any);
+    return { data: res };
+  } catch (err) {
+    return api.put<Book>(`/books/${id}`, data);
+  }
+};
 
-export const activateStripeSetting = (id: string) => api.put<StripeSetting>(`/checkout/stripe-settings/${id}/activate`);
-export const updateStripeSetting = (id: string, data: Partial<StripeSetting>) => api.put<StripeSetting>(`/checkout/stripe-settings/${id}`, data);
-export const deleteStripeSetting = (id: string) => api.delete(`/checkout/stripe-settings/${id}`);
+export const deleteBook = async (id: string) => {
+  try {
+    await deleteBookDirect(id);
+    return { data: { message: 'Book deleted' } };
+  } catch {
+    return api.delete(`/books/${id}`);
+  }
+};
 
+export const deleteBatchBooks = async (ids: string[]) => {
+  try {
+    await deleteBatchBooksDirect(ids);
+    return { data: { message: 'Books deleted' } };
+  } catch {
+    return api.post('/books/delete-batch', { ids });
+  }
+};
+
+export const deleteAllBooks = async (site?: string) => {
+  try {
+    await deleteAllBooksDirect(site);
+    return { data: { message: 'All books deleted' } };
+  } catch {
+    const params = site && site !== 'all' ? { site } : {};
+    return api.delete('/books/all/truncate', { params });
+  }
+};
+
+export const getStripeSettings = async (site?: string) => {
+  try {
+    const data = await fetchStripeSettingsDirect(site);
+    return { data };
+  } catch {
+    const params = site && site !== 'all' ? { site } : {};
+    return api.get<StripeSetting[]>('/checkout/stripe-settings', { params });
+  }
+};
+
+export const addStripeSetting = async (data: {
+  site_id?: string;
+  account_name: string;
+  publishable_key?: string;
+  secret_key: string;
+  is_active?: boolean;
+}) => {
+  try {
+    const res = await addStripeSettingDirect(data);
+    return { data: res };
+  } catch {
+    return api.post<StripeSetting>('/checkout/stripe-settings', data);
+  }
+};
+
+export const activateStripeSetting = async (id: string, siteId?: string) => {
+  try {
+    const res = await activateStripeSettingDirect(id, siteId);
+    return { data: res };
+  } catch {
+    return api.put<StripeSetting>(`/checkout/stripe-settings/${id}/activate`);
+  }
+};
+
+export const updateStripeSetting = async (id: string, data: Partial<StripeSetting>) => {
+  try {
+    const res = await updateStripeSettingDirect(id, data);
+    return { data: res };
+  } catch {
+    return api.put<StripeSetting>(`/checkout/stripe-settings/${id}`, data);
+  }
+};
+
+export const deleteStripeSetting = async (id: string) => {
+  try {
+    await deleteStripeSettingDirect(id);
+    return { data: { message: 'Deleted' } };
+  } catch {
+    return api.delete(`/checkout/stripe-settings/${id}`);
+  }
+};
