@@ -43,7 +43,11 @@ import {
   MessageSquare,
   Headphones,
   Inbox,
-  Clock
+  Clock,
+  ShoppingBag,
+  Receipt,
+  PackageCheck,
+  PackageX
 } from "lucide-react";
 import { 
   getBooks, 
@@ -69,6 +73,11 @@ import {
   getSupportTickets,
   updateSupportTicketStatus,
   deleteSupportTicket,
+  Order,
+  getOrders,
+  updateOrderStatus,
+  deleteOrder,
+  cleanupExpiredOrders,
   STOREFRONTS, 
   StorefrontSite 
 } from "@/lib/api";
@@ -95,7 +104,11 @@ import {
   deletePayPalSettingDirect,
   fetchSupportTicketsDirect,
   updateSupportTicketStatusDirect,
-  deleteSupportTicketDirect
+  deleteSupportTicketDirect,
+  fetchOrdersDirect,
+  updateOrderStatusDirect,
+  deleteOrderDirect,
+  cleanupExpiredOrdersDirect
 } from "@/lib/supabase";
 import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
@@ -141,7 +154,7 @@ function getBalancedCategories(count: number, pool: string[]): string[] {
 }
 
 export default function BookManagePage() {
-  const [activeTab, setActiveTab] = useState<'books' | 'stripe' | 'paypal' | 'tickets'>('books');
+  const [activeTab, setActiveTab] = useState<'books' | 'stripe' | 'paypal' | 'tickets' | 'orders'>('books');
   const [selectedSite, setSelectedSite] = useState<string>('bookpatr');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -149,6 +162,14 @@ export default function BookManagePage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Customer Orders states
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [orderStatusFilter, setOrderStatusFilter] = useState<string>('all');
+  const [orderSearchTerm, setOrderSearchTerm] = useState<string>("");
+  const [selectedOrderForView, setSelectedOrderForView] = useState<Order | null>(null);
+  const [isCleaningOrders, setIsCleaningOrders] = useState(false);
 
   // Support Tickets states
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
@@ -277,7 +298,8 @@ export default function BookManagePage() {
     fetchStripeSettings();
     fetchPayPalSettings();
     fetchTickets();
-  }, [selectedSite]);
+    fetchOrders();
+  }, [selectedSite, orderStatusFilter]);
 
   const fetchBooks = async () => {
     setLoading(true);
@@ -328,6 +350,18 @@ export default function BookManagePage() {
     }
   };
 
+  const fetchOrders = async () => {
+    setOrdersLoading(true);
+    try {
+      const response = await getOrders(selectedSite, orderStatusFilter);
+      setOrders(response.data || []);
+    } catch (error) {
+      console.error("Failed to fetch orders:", error);
+    } finally {
+      setOrdersLoading(false);
+    }
+  };
+
   const currentStorefront = STOREFRONTS.find(s => s.id === selectedSite);
 
   // Filter stripe settings for current selected site
@@ -363,6 +397,23 @@ export default function BookManagePage() {
     if (selectedSite === 'all') return tickets;
     return tickets.filter(t => t.site_id === selectedSite);
   }, [tickets, selectedSite]);
+
+  // Filter Customer Orders for current selected site & status & search
+  const currentSiteOrders = useMemo(() => {
+    let list = selectedSite === 'all' ? orders : orders.filter(o => o.site_id === selectedSite);
+    if (orderStatusFilter !== 'all') {
+      list = list.filter(o => o.status === orderStatusFilter);
+    }
+    if (orderSearchTerm.trim()) {
+      const term = orderSearchTerm.toLowerCase().trim();
+      list = list.filter(o => 
+        (o.order_code && o.order_code.toLowerCase().includes(term)) ||
+        (o.customer_name && o.customer_name.toLowerCase().includes(term)) ||
+        (o.customer_email && o.customer_email.toLowerCase().includes(term))
+      );
+    }
+    return list;
+  }, [orders, selectedSite, orderStatusFilter, orderSearchTerm]);
 
   // Author List for filtering
   const authors = useMemo(() => {
@@ -744,6 +795,47 @@ export default function BookManagePage() {
     }
   };
 
+  const handleUpdateOrderStatus = async (order: Order, nextStatus: string) => {
+    try {
+      await updateOrderStatus(order.id, nextStatus);
+      await fetchOrders();
+      if (selectedOrderForView?.id === order.id) {
+        setSelectedOrderForView({ ...selectedOrderForView, status: nextStatus });
+      }
+    } catch (error) {
+      alert("Không thể cập nhật trạng thái đơn hàng.");
+    }
+  };
+
+  const handleDeleteOrder = async (id: string) => {
+    if (!confirm("Bạn có chắc chắn muốn xóa đơn hàng này không?")) return;
+    try {
+      await deleteOrder(id);
+      await fetchOrders();
+      if (selectedOrderForView?.id === id) {
+        setSelectedOrderForView(null);
+      }
+    } catch (error) {
+      alert("Không thể xóa đơn hàng.");
+    }
+  };
+
+  const handleCleanupExpiredOrders = async () => {
+    if (!confirm("Hệ thống sẽ tự động tìm và xóa tất cả các đơn hàng 'Chờ thanh toán' đã quá 2 ngày. Bạn có muốn thực hiện không?")) return;
+    setIsCleaningOrders(true);
+    try {
+      const res: any = await cleanupExpiredOrders();
+      const count = res?.data?.deleted_count ?? 0;
+      await fetchOrders();
+      alert(`Đã dọn dẹp thành công ${count} đơn hàng chờ thanh toán quá hạn 2 ngày!`);
+    } catch (error) {
+      console.error("Cleanup error:", error);
+      alert("Dọn dẹp đơn hàng thất bại. Vui lòng kiểm tra console.");
+    } finally {
+      setIsCleaningOrders(false);
+    }
+  };
+
   const handleEdit = (book: Book) => {
     setEditingBook(book);
     setFormData({
@@ -1122,7 +1214,18 @@ export default function BookManagePage() {
                 }`}
               >
                 <Mail className="w-3.5 h-3.5" />
-                Hộp Thư Hỗ Trợ ({currentSiteTickets.length})
+                Hỗ Trợ ({currentSiteTickets.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('orders')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'orders'
+                    ? 'bg-white text-emerald-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <ShoppingBag className="w-3.5 h-3.5" />
+                Đơn Hàng ({currentSiteOrders.length})
               </button>
             </div>
           </div>
@@ -2026,6 +2129,255 @@ export default function BookManagePage() {
                                   onClick={() => handleDeleteTicket(ticket.id)}
                                   className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
                                   title="Xóa tin nhắn"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: CUSTOMER ORDERS (LIFECYCLE & AUTO-PURGE) */}
+        {activeTab === 'orders' && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h2 className="text-sm sm:text-base font-bold text-slate-800 flex items-center gap-2">
+                    <ShoppingBag className="w-5 h-5 text-emerald-600" />
+                    Quản Lý Đơn Hàng & Vòng Đời Thanh Toán
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    {currentSiteOrders.length} Đơn
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Đơn hàng được lưu khi khách hàng checkout. Đơn &quot;Chờ thanh toán&quot; sẽ tự động xóa sau 1-2 ngày để giải phóng bộ nhớ.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+                <button
+                  onClick={handleCleanupExpiredOrders}
+                  disabled={isCleaningOrders}
+                  className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl flex items-center gap-1.5 border border-amber-200 transition-colors cursor-pointer disabled:opacity-50"
+                  title="Xóa tất cả các đơn Chờ thanh toán đã quá hạn 2 ngày"
+                >
+                  <Trash2 className={`w-3.5 h-3.5 ${isCleaningOrders ? 'animate-spin' : ''}`} />
+                  <span>Dọn Dẹp Đơn Quá Hạn</span>
+                </button>
+                <button
+                  onClick={fetchOrders}
+                  disabled={ordersLoading}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${ordersLoading ? 'animate-spin' : ''}`} />
+                  <span>Làm mới</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3">
+              {/* Status Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                {[
+                  { id: 'all', label: 'Tất Cả' },
+                  { id: 'pending', label: '⏳ Chờ Thanh Toán' },
+                  { id: 'completed', label: '✅ Đã Thanh Toán' },
+                  { id: 'cancelled', label: '❌ Đã Hủy' }
+                ].map((tab) => {
+                  const isSelected = orderStatusFilter === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setOrderStatusFilter(tab.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-100'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Search Box */}
+              <div className="relative w-full md:w-72">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Tìm mã đơn, tên, email khách..."
+                  value={orderSearchTerm}
+                  onChange={(e) => setOrderSearchTerm(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-medium"
+                />
+              </div>
+            </div>
+
+            {/* Orders Table */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      <th className="px-6 py-3.5">Mã Đơn</th>
+                      <th className="px-6 py-3.5">Thời Gian</th>
+                      <th className="px-6 py-3.5">Website</th>
+                      <th className="px-6 py-3.5">Khách Hàng</th>
+                      <th className="px-6 py-3.5">Sách Đặt Mua</th>
+                      <th className="px-6 py-3.5">Tổng Tiền</th>
+                      <th className="px-6 py-3.5">Cổng TT</th>
+                      <th className="px-6 py-3.5 text-center">Trạng Thái</th>
+                      <th className="px-6 py-3.5 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {ordersLoading ? (
+                      <tr>
+                        <td colSpan={9} className="py-20 text-center text-slate-400">
+                          <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-600 mb-2" />
+                          <span>Đang tải danh sách đơn hàng...</span>
+                        </td>
+                      </tr>
+                    ) : currentSiteOrders.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-16 text-center text-slate-400">
+                          <ShoppingBag className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                          <p className="font-bold text-slate-600">Chưa có đơn hàng nào phù hợp.</p>
+                          <p className="text-xs text-slate-400 mt-1">Khi khách hàng đặt mua sách, đơn hàng sẽ tự động lưu trữ tại đây!</p>
+                        </td>
+                      </tr>
+                    ) : (
+                      currentSiteOrders.map((order) => {
+                        const siteObj = STOREFRONTS.find(s => s.id === order.site_id);
+                        const isCompleted = order.status === 'completed';
+                        const isPending = order.status === 'pending';
+                        const dateStr = new Date(order.created_at).toLocaleString('vi-VN', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        });
+
+                        const itemCount = Array.isArray(order.items) ? order.items.length : 0;
+                        const firstItemTitle = Array.isArray(order.items) && order.items[0]?.title ? order.items[0].title : 'Sách điện tử';
+
+                        return (
+                          <tr key={order.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-1 rounded-md text-[11px] border border-slate-200">
+                                {order.order_code || `#${order.id.substring(0, 8)}`}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-slate-500 font-mono text-[11px]">
+                              {dateStr}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {siteObj ? (
+                                <span className={`px-2.5 py-1 text-[10px] font-extrabold rounded-md border ${siteObj.badgeBg} ${siteObj.badgeText}`}>
+                                  {siteObj.name}
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md border border-slate-200">
+                                  {order.site_id}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-slate-900">{order.customer_name || 'Khách hàng'}</div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-slate-500 font-mono text-[11px]">{order.customer_email}</span>
+                                <button
+                                  onClick={() => handleCopyKey(order.customer_email, `order_email_${order.id}`)}
+                                  className="text-slate-400 hover:text-emerald-600 cursor-pointer"
+                                  title="Sao chép email"
+                                >
+                                  {copiedKeyId === `order_email_${order.id}` ? (
+                                    <Check className="w-3 h-3 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="w-3 h-3" />
+                                  )}
+                                </button>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 max-w-xs">
+                              <div className="font-semibold text-slate-800 truncate" title={firstItemTitle}>
+                                {firstItemTitle}
+                              </div>
+                              <div className="text-slate-400 text-[10px]">
+                                {itemCount > 1 ? `+ ${itemCount - 1} cuốn sách khác` : '1 cuốn sách'}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap font-bold text-slate-900 font-mono">
+                              ${Number(order.total_amount || 0).toFixed(2)} {order.currency || 'USD'}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              {order.payment_method === 'paypal' ? (
+                                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-md font-bold text-[10px] flex items-center gap-1 w-fit">
+                                  <span className="font-extrabold text-[#0079C1]">P</span> PayPal
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md font-bold text-[10px] flex items-center gap-1 w-fit">
+                                  <CreditCard className="w-3 h-3 text-indigo-600" /> Stripe
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center whitespace-nowrap">
+                              <button
+                                onClick={() => handleUpdateOrderStatus(order, isCompleted ? 'pending' : 'completed')}
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold transition-all cursor-pointer inline-flex items-center gap-1 border ${
+                                  isCompleted
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                    : isPending
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                                title="Bấm để đổi trạng thái"
+                              >
+                                {isCompleted ? (
+                                  <>
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    Đã Thanh Toán
+                                  </>
+                                ) : isPending ? (
+                                  <>
+                                    <Clock className="w-3 h-3 text-amber-600" />
+                                    Chờ Thanh Toán
+                                  </>
+                                ) : (
+                                  <>
+                                    <PackageX className="w-3 h-3 text-slate-400" />
+                                    {order.status}
+                                  </>
+                                )}
+                              </button>
+                            </td>
+                            <td className="px-6 py-4 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => setSelectedOrderForView(order)}
+                                  className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold rounded-lg text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Xem chi tiết đơn hàng"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  Chi Tiết
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteOrder(order.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                  title="Xóa đơn hàng"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -3203,6 +3555,169 @@ export default function BookManagePage() {
                   Trả Lời Khách Hàng
                 </a>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View Customer Order Details Modal */}
+      {selectedOrderForView && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center flex-shrink-0">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">
+                      Chi Tiết Đơn Hàng {selectedOrderForView.order_code || `#${selectedOrderForView.id.substring(0, 8)}`}
+                    </h3>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                      selectedOrderForView.status === 'completed'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : selectedOrderForView.status === 'pending'
+                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}>
+                      {selectedOrderForView.status === 'completed' ? 'Đã Thanh Toán' : selectedOrderForView.status === 'pending' ? 'Chờ Thanh Toán' : selectedOrderForView.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">ID: {selectedOrderForView.id}</div>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedOrderForView(null)} 
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 text-xs overflow-y-auto">
+              {/* Order Info Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <div>
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Khách Hàng</span>
+                  <span className="font-bold text-slate-800 text-sm">{selectedOrderForView.customer_name || 'Khách Hàng'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Website Đặt Hàng</span>
+                  <span className="font-bold text-indigo-700 uppercase">{selectedOrderForView.site_id}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Tổng Tiền</span>
+                  <span className="font-bold text-emerald-700 font-mono text-sm">
+                    ${Number(selectedOrderForView.total_amount || 0).toFixed(2)} {selectedOrderForView.currency || 'USD'}
+                  </span>
+                </div>
+                <div className="col-span-2 sm:col-span-2">
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Email Nhận Sách</span>
+                  <span className="font-bold text-slate-800 font-mono">{selectedOrderForView.customer_email}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Cổng Thanh Toán</span>
+                  <span className="font-bold text-slate-800 uppercase">{selectedOrderForView.payment_method || 'Stripe'}</span>
+                </div>
+                <div className="col-span-2 sm:col-span-2">
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Mã Giao Dịch (Payment ID)</span>
+                  <span className="font-mono text-slate-600 truncate block text-[11px]">
+                    {selectedOrderForView.payment_id || 'Chưa phát sinh (Đang chờ khách thanh toán)'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-medium block text-[10px] uppercase">Thời Gian Tạo</span>
+                  <span className="text-slate-600 font-mono">
+                    {new Date(selectedOrderForView.created_at).toLocaleString('vi-VN')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Items in Order */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Danh Sách Sách Trong Đơn Hàng ({Array.isArray(selectedOrderForView.items) ? selectedOrderForView.items.length : 0})
+                  </label>
+                </div>
+                
+                <div className="border border-slate-200 rounded-2xl overflow-hidden divide-y divide-slate-100 bg-white">
+                  {Array.isArray(selectedOrderForView.items) && selectedOrderForView.items.length > 0 ? (
+                    selectedOrderForView.items.map((item, idx) => (
+                      <div key={idx} className="p-3.5 flex items-center justify-between gap-3 hover:bg-slate-50/50 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {item.cover_url ? (
+                            <img src={item.cover_url} alt={item.title} className="w-10 h-14 object-cover rounded-md flex-shrink-0 shadow-xs border border-slate-100" />
+                          ) : (
+                            <div className="w-10 h-14 bg-slate-100 rounded-md flex items-center justify-center text-slate-400 flex-shrink-0">
+                              <BookIcon className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="truncate">
+                            <h4 className="font-bold text-slate-900 truncate text-xs">{item.title || 'Sách điện tử'}</h4>
+                            <p className="text-[11px] text-slate-400 truncate">{item.author || 'Tác giả ẩn danh'}</p>
+                            <span className="text-[10px] text-slate-500 font-mono">SL: {item.quantity || 1}</span>
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <span className="font-bold font-mono text-slate-900 text-xs">{item.price || '$0.50'}</span>
+                          {item.file_url && (
+                            <a
+                              href={item.file_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block text-[10px] text-indigo-600 hover:underline font-medium mt-0.5"
+                            >
+                              Tải File ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-4 text-center text-slate-400 text-xs">
+                      Không có thông tin chi tiết từng cuốn sách.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleUpdateOrderStatus(
+                    selectedOrderForView, 
+                    selectedOrderForView.status === 'completed' ? 'pending' : 'completed'
+                  )}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedOrderForView.status === 'completed'
+                      ? 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100'
+                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  {selectedOrderForView.status === 'completed' ? 'Đổi về Chờ Thanh Toán' : 'Đánh dấu Đã Thanh Toán'}
+                </button>
+                <button
+                  onClick={() => handleDeleteOrder(selectedOrderForView.id)}
+                  className="px-3.5 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition-colors cursor-pointer border border-rose-200"
+                >
+                  Xóa Đơn
+                </button>
+              </div>
+
+              <a
+                href={`mailto:${selectedOrderForView.customer_email}?subject=Xác nhận đơn hàng [${selectedOrderForView.order_code || selectedOrderForView.id.substring(0, 6)}] - ${selectedOrderForView.site_id.toUpperCase()}`}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-md shadow-indigo-200 transition-colors"
+              >
+                <Mail className="w-4 h-4" />
+                Gửi Email Cho Khách
+              </a>
             </div>
           </div>
         </div>

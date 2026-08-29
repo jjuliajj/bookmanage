@@ -653,3 +653,51 @@ export async function deleteSupportTicketDirect(id: string): Promise<void> {
   const { error } = await supabase.from('support_tickets').delete().eq('id', id);
   if (error) throw error;
 }
+
+// ==========================================
+// CUSTOMER ORDERS
+// ==========================================
+export async function fetchOrdersDirect(site?: string, status?: string): Promise<any[]> {
+  let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
+  if (site && site !== 'all') {
+    query = query.eq('site_id', site);
+  }
+  if (status && status !== 'all') {
+    query = query.eq('status', status);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.warn('fetchOrdersDirect notice:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+export async function updateOrderStatusDirect(id: string, status: string): Promise<void> {
+  const { error } = await supabase.from('orders').update({
+    status,
+    updated_at: new Date().toISOString()
+  }).eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteOrderDirect(id: string): Promise<void> {
+  const { error } = await supabase.from('orders').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function cleanupExpiredOrdersDirect(): Promise<{ deleted_count: number }> {
+  const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('orders')
+    .delete()
+    .eq('status', 'pending')
+    .lt('created_at', twoDaysAgo)
+    .select();
+
+  if (error) {
+    console.warn('cleanupExpiredOrdersDirect notice:', error.message);
+    return { deleted_count: 0 };
+  }
+  return { deleted_count: data ? data.length : 0 };
+}

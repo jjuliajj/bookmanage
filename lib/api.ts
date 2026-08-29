@@ -295,3 +295,66 @@ export const deleteSupportTicket = async (id: string) => {
   await deleteSupportTicketDirect(id);
   return { data: { message: 'Ticket deleted' } };
 };
+
+// ==========================================
+// CUSTOMER ORDERS API
+// ==========================================
+export interface Order {
+  id: string;
+  order_code: string;
+  site_id: string;
+  customer_name: string;
+  customer_email: string;
+  items: any[];
+  total_amount: number;
+  currency: string;
+  payment_method: 'stripe' | 'paypal' | string;
+  status: 'pending' | 'completed' | 'cancelled' | 'failed' | string;
+  payment_id?: string;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string;
+}
+
+export const getOrders = async (site?: string, status?: string) => {
+  try {
+    const { fetchOrdersDirect } = await import('./supabase');
+    const res = await fetchOrdersDirect(site, status);
+    return { data: res };
+  } catch {
+    const params: any = {};
+    if (site && site !== 'all') params.site = site;
+    if (status && status !== 'all') params.status = status;
+    return api.get<Order[]>('/orders', { params });
+  }
+};
+
+export const updateOrderStatus = async (id: string, status: string) => {
+  try {
+    const { updateOrderStatusDirect } = await import('./supabase');
+    await updateOrderStatusDirect(id, status);
+    return { data: { message: 'Order status updated' } };
+  } catch {
+    return api.put(`/orders/${id}/status`, { status });
+  }
+};
+
+export const deleteOrder = async (id: string) => {
+  try {
+    const { deleteOrderDirect } = await import('./supabase');
+    await deleteOrderDirect(id);
+    return { data: { message: 'Order deleted' } };
+  } catch {
+    return api.delete(`/orders/${id}`);
+  }
+};
+
+export const cleanupExpiredOrders = async () => {
+  try {
+    const { cleanupExpiredOrdersDirect } = await import('./supabase');
+    const res = await cleanupExpiredOrdersDirect();
+    return { data: res };
+  } catch {
+    return api.post('/orders/cleanup-expired');
+  }
+};
