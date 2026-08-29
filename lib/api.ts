@@ -257,3 +257,41 @@ export const deletePayPalSetting = async (id: string) => {
     return api.delete(`/checkout/paypal-settings/${id}`);
   }
 };
+
+// ==========================================
+// SUPPORT TICKETS / INQUIRIES API
+// ==========================================
+export interface SupportTicket {
+  id: string;
+  site_id: string;
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  recipient_email?: string;
+  status: 'pending' | 'resolved' | string;
+  created_at: string;
+}
+
+export const getSupportTickets = async (site?: string) => {
+  try {
+    const { fetchSupportTicketsDirect } = await import('./supabase');
+    const res = await fetchSupportTicketsDirect(site);
+    return { data: res };
+  } catch {
+    const params = site && site !== 'all' ? { site } : {};
+    return api.get<SupportTicket[]>('/contact', { params });
+  }
+};
+
+export const updateSupportTicketStatus = async (id: string, status: string) => {
+  const { updateSupportTicketStatusDirect } = await import('./supabase');
+  await updateSupportTicketStatusDirect(id, status);
+  return { data: { message: 'Status updated' } };
+};
+
+export const deleteSupportTicket = async (id: string) => {
+  const { deleteSupportTicketDirect } = await import('./supabase');
+  await deleteSupportTicketDirect(id);
+  return { data: { message: 'Ticket deleted' } };
+};

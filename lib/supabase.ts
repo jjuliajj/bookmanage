@@ -627,3 +627,29 @@ export async function deletePayPalSettingDirect(id: string): Promise<void> {
   const { error } = await supabase.from('paypal_settings').delete().eq('id', id);
   if (error) throw error;
 }
+
+// ==========================================
+// SUPPORT TICKETS / INQUIRIES
+// ==========================================
+export async function fetchSupportTicketsDirect(site?: string): Promise<any[]> {
+  let query = supabase.from('support_tickets').select('*').order('created_at', { ascending: false });
+  if (site && site !== 'all') {
+    query = query.eq('site_id', site);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.warn('fetchSupportTicketsDirect notice:', error.message);
+    return [];
+  }
+  return data || [];
+}
+
+export async function updateSupportTicketStatusDirect(id: string, status: string): Promise<void> {
+  const { error } = await supabase.from('support_tickets').update({ status }).eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteSupportTicketDirect(id: string): Promise<void> {
+  const { error } = await supabase.from('support_tickets').delete().eq('id', id);
+  if (error) throw error;
+}
