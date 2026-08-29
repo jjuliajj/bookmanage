@@ -44,6 +44,17 @@ export interface StripeSetting {
   created_at: string;
 }
 
+export interface PayPalSetting {
+  id: string;
+  site_id?: string;
+  account_name: string;
+  client_id: string;
+  client_secret: string;
+  mode: 'live' | 'sandbox';
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface StorefrontSite {
   id: string;
   name: string;
@@ -183,5 +194,66 @@ export const deleteStripeSetting = async (id: string) => {
     return { data: { message: 'Deleted' } };
   } catch {
     return api.delete(`/checkout/stripe-settings/${id}`);
+  }
+};
+
+// ==========================================
+// PAYPAL SETTINGS API CALLS
+// ==========================================
+export const getPayPalSettings = async (site?: string) => {
+  try {
+    const { fetchPayPalSettingsDirect } = await import('./supabase');
+    const data = await fetchPayPalSettingsDirect(site);
+    return { data };
+  } catch {
+    const params = site && site !== 'all' ? { site } : {};
+    return api.get<PayPalSetting[]>('/checkout/paypal-settings', { params });
+  }
+};
+
+export const addPayPalSetting = async (data: {
+  site_id?: string;
+  account_name: string;
+  client_id: string;
+  client_secret: string;
+  mode?: 'live' | 'sandbox';
+  is_active?: boolean;
+}) => {
+  try {
+    const { addPayPalSettingDirect } = await import('./supabase');
+    const res = await addPayPalSettingDirect(data);
+    return { data: res };
+  } catch {
+    return api.post<PayPalSetting>('/checkout/paypal-settings', data);
+  }
+};
+
+export const activatePayPalSetting = async (id: string, siteId?: string) => {
+  try {
+    const { activatePayPalSettingDirect } = await import('./supabase');
+    const res = await activatePayPalSettingDirect(id, siteId);
+    return { data: res };
+  } catch {
+    return api.put<PayPalSetting>(`/checkout/paypal-settings/${id}/activate`);
+  }
+};
+
+export const updatePayPalSetting = async (id: string, data: Partial<PayPalSetting>) => {
+  try {
+    const { updatePayPalSettingDirect } = await import('./supabase');
+    const res = await updatePayPalSettingDirect(id, data);
+    return { data: res };
+  } catch {
+    return api.put<PayPalSetting>(`/checkout/paypal-settings/${id}`, data);
+  }
+};
+
+export const deletePayPalSetting = async (id: string) => {
+  try {
+    const { deletePayPalSettingDirect } = await import('./supabase');
+    await deletePayPalSettingDirect(id);
+    return { data: { message: 'Deleted' } };
+  } catch {
+    return api.delete(`/checkout/paypal-settings/${id}`);
   }
 };

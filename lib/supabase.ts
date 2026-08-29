@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { Book, StripeSetting } from './api';
+import { Book, StripeSetting, PayPalSetting } from './api';
 
 export const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://efpyuqiycwciooowuway.supabase.co';
 export const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_KGfuUm7wfewla-9GqdIuOg_Q6xdK0dP';
@@ -445,5 +445,185 @@ export async function activateStripeSettingDirect(id: string, siteId?: string): 
 
 export async function deleteStripeSettingDirect(id: string): Promise<void> {
   const { error } = await supabase.from('stripe_settings').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// 12. Helper to parse and extract site_id and clean display name from a paypal setting
+export function parsePayPalSetting(r: any): PayPalSetting {
+  if (!r) return r;
+  let site_id = r.site_id;
+  let cleanName = r.account_name || '';
+
+  // Extract [site_id] prefix from account_name if present
+  const match = r.account_name && r.account_name.match(/^\[([a-zA-Z0-9_\-]+)\]\s*(.*)$/);
+  if (match) {
+    site_id = match[1];
+    cleanName = match[2] || r.account_name;
+  } else if (!site_id) {
+    site_id = 'bookpatr';
+  }
+
+  return {
+    ...r,
+    site_id: (site_id || 'bookpatr').toLowerCase().trim(),
+    account_name: cleanName,
+    mode: (r.mode || 'live').toLowerCase().trim(),
+  };
+}
+
+// 13. PayPal Settings Direct Operations (Site-Isolated Multi-Tenant)
+export async function fetchPayPalSettingsDirect(siteId?: string): Promise<PayPalSetting[]> {
+  const { data, error } = await supabase
+    .from('paypal_settings')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  let settings = (data || []).map(parsePayPalSetting);
+
+  if (siteId && siteId !== 'all') {
+    settings = settings.filter((s: any) => s.site_id === 'all' || s.site_id === siteId.toLowerCase().trim());
+  }
+
+  return settings;
+}
+
+export async function addPayPalSettingDirect(data: {
+  site_id?: string;
+  account_name: string;
+  client_id: string;
+  client_secret: string;
+  mode?: 'live' | 'sandbox';
+  is_active?: boolean;
+}): Promise<PayPalSetting> {
+  const targetSite = (data.site_id || 'all').toLowerCase().trim();
+  const cleanName = data.account_name.replace(/^\[[a-zA-Z0-9_\-]+\]\s*/, '').trim();
+  const formattedAccountName = `[${targetSite}] ${cleanName}`;
+
+  if (data.is_active) {
+    const { data: allData } = await supabase.from('paypal_settings').select('*');
+    if (allData) {
+      const toDeactivate = allData
+        .map(parsePayPalSetting)
+        .filter((s: any) => s.site_id === targetSite && s.is_active)
+        .map((s: any) => s.id);
+      if (toDeactivate.length > 0) {
+        await supabase.from('paypal_settings').update({ is_active: false }).in('id', toDeactivate);
+      }
+    }
+  }
+
+  const insertPayload = {
+    account_name: formattedAccountName,
+    client_id: data.client_id.trim(),
+    client_secret: data.client_secret.trim(),
+    mode: (data.mode || 'live').toLowerCase().trim(),
+    is_active: Boolean(data.is_active),
+  };
+
+  let inserted: any = null;
+  try {
+    const { data: res, error } = await supabase
+      .from('paypal_settings')
+      .insert([{ ...insertPayload, site_id: targetSite }])
+      .select();
+    if (error) throw error;
+    inserted = res;
+  } catch {
+    const { data: res, error } = await supabase
+      .from('paypal_settings')
+      .insert([insertPayload])
+      .select();
+    if (error) throw error;
+    inserted = res;
+  }
+
+  return parsePayPalSetting(inserted[0]);
+}
+
+export async function updatePayPalSettingDirect(
+  id: string,
+  data: Partial<PayPalSetting>
+): Promise<PayPalSetting> {
+  const { data: currentRecord } = await supabase.from('paypal_settings').select('*').eq('id', id).single();
+  const currentParsed = parsePayPalSetting(currentRecord);
+
+  const targetSite = (data.site_id || currentParsed?.site_id || 'all').toLowerCase().trim();
+  const cleanName = (data.account_name !== undefined ? data.account_name : currentParsed?.account_name || '')
+    .replace(/^\[[a-zA-Z0-9_\-]+\]\s*/, '').trim();
+  const formattedAccountName = `[${targetSite}] ${cleanName}`;
+
+  const updateFields: any = {
+    account_name: formattedAccountName,
+  };
+  if (data.client_id !== undefined) updateFields.client_id = data.client_id.trim();
+  if (data.client_secret !== undefined) updateFields.client_secret = data.client_secret.trim();
+  if (data.mode !== undefined) updateFields.mode = data.mode.toLowerCase().trim();
+  if (data.is_active !== undefined) updateFields.is_active = data.is_active;
+
+  if (data.is_active) {
+    const { data: allData } = await supabase.from('paypal_settings').select('*');
+    if (allData) {
+      const toDeactivate = allData
+        .map(parsePayPalSetting)
+        .filter((s: any) => s.id !== id && s.site_id === targetSite && s.is_active)
+        .map((s: any) => s.id);
+      if (toDeactivate.length > 0) {
+        await supabase.from('paypal_settings').update({ is_active: false }).in('id', toDeactivate);
+      }
+    }
+  }
+
+  let updated: any = null;
+  try {
+    const { data: res, error } = await supabase
+      .from('paypal_settings')
+      .update({ ...updateFields, site_id: targetSite })
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    updated = res;
+  } catch {
+    const { data: res, error } = await supabase
+      .from('paypal_settings')
+      .update(updateFields)
+      .eq('id', id)
+      .select();
+    if (error) throw error;
+    updated = res;
+  }
+
+  return parsePayPalSetting(updated[0]);
+}
+
+export async function activatePayPalSettingDirect(id: string, siteId?: string): Promise<PayPalSetting> {
+  const { data: targetRecord } = await supabase.from('paypal_settings').select('*').eq('id', id).single();
+  const parsed = parsePayPalSetting(targetRecord);
+  const targetSite = (siteId || parsed.site_id || 'all').toLowerCase().trim();
+
+  // Deactivate other accounts belonging to this site only
+  const { data: allData } = await supabase.from('paypal_settings').select('*');
+  if (allData) {
+    const toDeactivate = allData
+      .map(parsePayPalSetting)
+      .filter((s: any) => s.id !== id && s.site_id === targetSite && s.is_active)
+      .map((s: any) => s.id);
+    if (toDeactivate.length > 0) {
+      await supabase.from('paypal_settings').update({ is_active: false }).in('id', toDeactivate);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('paypal_settings')
+    .update({ is_active: true })
+    .eq('id', id)
+    .select();
+
+  if (error) throw error;
+  return parsePayPalSetting(data[0]);
+}
+
+export async function deletePayPalSettingDirect(id: string): Promise<void> {
+  const { error } = await supabase.from('paypal_settings').delete().eq('id', id);
   if (error) throw error;
 }

@@ -54,6 +54,12 @@ import {
   activateStripeSetting, 
   deleteStripeSetting, 
   StripeSetting, 
+  getPayPalSettings,
+  addPayPalSetting,
+  updatePayPalSetting,
+  activatePayPalSetting,
+  deletePayPalSetting,
+  PayPalSetting,
   STOREFRONTS, 
   StorefrontSite 
 } from "@/lib/api";
@@ -72,7 +78,12 @@ import {
   addStripeSettingDirect,
   updateStripeSettingDirect,
   activateStripeSettingDirect,
-  deleteStripeSettingDirect
+  deleteStripeSettingDirect,
+  fetchPayPalSettingsDirect,
+  addPayPalSettingDirect,
+  updatePayPalSettingDirect,
+  activatePayPalSettingDirect,
+  deletePayPalSettingDirect
 } from "@/lib/supabase";
 import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
@@ -118,7 +129,7 @@ function getBalancedCategories(count: number, pool: string[]): string[] {
 }
 
 export default function BookManagePage() {
-  const [activeTab, setActiveTab] = useState<'books' | 'stripe'>('books');
+  const [activeTab, setActiveTab] = useState<'books' | 'stripe' | 'paypal'>('books');
   const [selectedSite, setSelectedSite] = useState<string>('bookpatr');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,6 +176,22 @@ export default function BookManagePage() {
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [showModalSecretKey, setShowModalSecretKey] = useState(false);
   const [showModalPublishableKey, setShowModalPublishableKey] = useState(false);
+
+  // PayPal Settings states
+  const [paypalSettings, setPaypalSettings] = useState<PayPalSetting[]>([]);
+  const [paypalLoading, setPaypalLoading] = useState(false);
+  const [isPayPalModalOpen, setIsPayPalModalOpen] = useState(false);
+  const [editingPayPalSetting, setEditingPayPalSetting] = useState<PayPalSetting | null>(null);
+  const [paypalFormData, setPaypalFormData] = useState({
+    site_id: "bookbazaar",
+    account_name: "",
+    client_id: "",
+    client_secret: "",
+    mode: "live" as 'live' | 'sandbox',
+    is_active: true
+  });
+  const [showModalPayPalSecret, setShowModalPayPalSecret] = useState(false);
+  const [showModalPayPalClientId, setShowModalPayPalClientId] = useState(false);
 
   const toggleKeyVisibility = (keyId: string) => {
     setVisibleKeys(prev => ({
@@ -231,6 +258,7 @@ export default function BookManagePage() {
   useEffect(() => {
     fetchBooks();
     fetchStripeSettings();
+    fetchPayPalSettings();
   }, [selectedSite]);
 
   const fetchBooks = async () => {
@@ -258,6 +286,18 @@ export default function BookManagePage() {
     }
   };
 
+  const fetchPayPalSettings = async () => {
+    setPaypalLoading(true);
+    try {
+      const response = await getPayPalSettings();
+      setPaypalSettings(response.data);
+    } catch (error) {
+      console.error("Failed to fetch PayPal settings:", error);
+    } finally {
+      setPaypalLoading(false);
+    }
+  };
+
   const currentStorefront = STOREFRONTS.find(s => s.id === selectedSite);
 
   // Filter stripe settings for current selected site
@@ -273,6 +313,20 @@ export default function BookManagePage() {
     return stripeSettings.find(s => s.site_id === selectedSite && s.is_active) || 
            stripeSettings.find(s => s.site_id === 'all' && s.is_active);
   }, [stripeSettings, selectedSite]);
+
+  // Filter PayPal settings for current selected site
+  const currentSitePayPalSettings = useMemo(() => {
+    if (selectedSite === 'all') return paypalSettings;
+    return paypalSettings.filter(s => s.site_id === selectedSite || s.site_id === 'all');
+  }, [paypalSettings, selectedSite]);
+
+  const activePayPalSettingForSite = useMemo(() => {
+    if (selectedSite === 'all') {
+      return paypalSettings.find(s => s.is_active);
+    }
+    return paypalSettings.find(s => s.site_id === selectedSite && s.is_active) || 
+           paypalSettings.find(s => s.site_id === 'all' && s.is_active);
+  }, [paypalSettings, selectedSite]);
 
   // Author List for filtering
   const authors = useMemo(() => {
@@ -556,6 +610,78 @@ export default function BookManagePage() {
       await fetchStripeSettings();
     } catch (error) {
       alert("Failed to delete Stripe configuration");
+    }
+  };
+
+  // PayPal Handlers
+  const handleStartAddPayPalSetting = () => {
+    setEditingPayPalSetting(null);
+    const targetSite = selectedSite !== 'all' ? selectedSite : 'bookbazaar';
+    const siteObj = STOREFRONTS.find(s => s.id === targetSite);
+    setPaypalFormData({ 
+      site_id: targetSite,
+      account_name: siteObj ? `${siteObj.name} PayPal Gateway` : "Main PayPal Gateway",
+      client_id: "", 
+      client_secret: "", 
+      mode: "live",
+      is_active: true 
+    });
+    setIsPayPalModalOpen(true);
+  };
+
+  const handleStartEditPayPalSetting = (setting: PayPalSetting) => {
+    setEditingPayPalSetting(setting);
+    setPaypalFormData({
+      site_id: setting.site_id || (selectedSite !== 'all' ? selectedSite : "bookbazaar"),
+      account_name: setting.account_name,
+      client_id: setting.client_id || "",
+      client_secret: setting.client_secret || "",
+      mode: setting.mode || "live",
+      is_active: setting.is_active
+    });
+    setIsPayPalModalOpen(true);
+  };
+
+  const handleAddPayPalSettingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!paypalFormData.account_name || !paypalFormData.client_id || !paypalFormData.client_secret) {
+      alert("Please enter Account Name, Client ID, and Client Secret.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      if (editingPayPalSetting) {
+        await updatePayPalSetting(editingPayPalSetting.id, paypalFormData);
+      } else {
+        await addPayPalSetting(paypalFormData);
+      }
+      await fetchPayPalSettings();
+      setIsPayPalModalOpen(false);
+      setEditingPayPalSetting(null);
+    } catch (error: any) {
+      console.error("Failed to save PayPal account:", error);
+      alert(error.response?.data?.error || error.message || "Failed to save PayPal account configuration.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleActivatePayPalSetting = async (id: string) => {
+    try {
+      await activatePayPalSetting(id, selectedSite);
+      await fetchPayPalSettings();
+    } catch (error) {
+      alert("Failed to activate PayPal account");
+    }
+  };
+
+  const handleDeletePayPalSetting = async (id: string) => {
+    if (!confirm("Are you sure you want to delete this PayPal configuration?")) return;
+    try {
+      await deletePayPalSetting(id);
+      await fetchPayPalSettings();
+    } catch (error) {
+      alert("Failed to delete PayPal configuration");
     }
   };
 
@@ -917,6 +1043,17 @@ export default function BookManagePage() {
                 <CreditCard className="w-3.5 h-3.5" />
                 Stripe ({currentSiteStripeSettings.length})
               </button>
+              <button
+                onClick={() => setActiveTab('paypal')}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeTab === 'paypal'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <span className="font-extrabold text-[#0079C1] text-xs">P</span>
+                PayPal ({currentSitePayPalSettings.length})
+              </button>
             </div>
           </div>
         </header>
@@ -933,13 +1070,18 @@ export default function BookManagePage() {
               )}
             </span>
           </div>
-          <div className="flex items-center gap-4 text-xs">
+          <div className="flex items-center gap-4 text-xs flex-wrap">
             <span className="text-slate-400">
               📚 Sách: <strong className="text-white">{books.length} cuốn</strong>
             </span>
             <span className="text-slate-400">
               💳 Cổng Stripe: <strong className={activeStripeSettingForSite ? "text-emerald-400" : "text-amber-400"}>
                 {activeStripeSettingForSite ? activeStripeSettingForSite.account_name : "Chưa cấu hình"}
+              </strong>
+            </span>
+            <span className="text-slate-400">
+              🅿️ Cổng PayPal: <strong className={activePayPalSettingForSite ? "text-blue-400" : "text-amber-400"}>
+                {activePayPalSettingForSite ? `${activePayPalSettingForSite.account_name} (${activePayPalSettingForSite.mode.toUpperCase()})` : "Chưa cấu hình"}
               </strong>
             </span>
           </div>
@@ -1433,6 +1575,227 @@ export default function BookManagePage() {
             </div>
           </div>
         )}
+
+        {/* TAB 3: PAYPAL SETTINGS MANAGEMENT */}
+        {activeTab === 'paypal' && (
+          <div className="space-y-4">
+            {/* Header / Actions */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <span className="w-7 h-7 rounded-lg bg-blue-50 text-[#0079C1] flex items-center justify-center font-extrabold text-sm border border-blue-200">
+                    P
+                  </span>
+                  Cấu Hình Cổng Thanh Toán PayPal REST API
+                  {selectedSite !== 'all' && (
+                    <span className="text-xs bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-bold border border-blue-100">
+                      Website: {currentStorefront?.name}
+                    </span>
+                  )}
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Mỗi website có thể cấu hình tài khoản PayPal riêng (hỗ trợ cả Live & Sandbox), nhận tiền trực tiếp từ khách hàng thanh toán qua PayPal.
+                </p>
+              </div>
+              <button
+                onClick={handleStartAddPayPalSetting}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-200 flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                Thêm Cổng PayPal Cho {selectedSite === 'all' ? 'Hệ Thống' : currentStorefront?.name}
+              </button>
+            </div>
+
+            {/* PayPal Settings Table */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      <th className="py-3.5 px-6">Website / Domain</th>
+                      <th className="py-3.5 px-6">Tên Cấu Hình</th>
+                      <th className="py-3.5 px-6">Chế Độ</th>
+                      <th className="py-3.5 px-6">Client ID</th>
+                      <th className="py-3.5 px-6">Client Secret</th>
+                      <th className="py-3.5 px-6 text-center">Trạng Thái</th>
+                      <th className="py-3.5 px-6 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
+                    {paypalLoading ? (
+                      <tr>
+                        <td colSpan={7} className="text-center py-12 text-slate-400">
+                          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-blue-600" />
+                          Đang tải danh sách tài khoản PayPal...
+                        </td>
+                      </tr>
+                    ) : currentSitePayPalSettings.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center py-12 text-slate-400">
+                          Chưa có tài khoản PayPal nào được cấu hình cho {selectedSite === 'all' ? 'hệ thống' : currentStorefront?.name}.
+                          <div className="mt-3">
+                            <button
+                              onClick={handleStartAddPayPalSetting}
+                              className="px-4 py-2 bg-blue-600 text-white font-bold rounded-xl text-xs hover:bg-blue-700 transition-all cursor-pointer"
+                            >
+                              Thêm Cổng PayPal Ngay
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      currentSitePayPalSettings.map((setting) => {
+                        const siteObj = STOREFRONTS.find(s => s.id === setting.site_id);
+                        const isGlobal = setting.site_id === 'all';
+                        const isLive = (setting.mode || 'live').toLowerCase() === 'live';
+                        const clientIdId = `paypal_client_${setting.id}`;
+                        const secretKeyId = `paypal_secret_${setting.id}`;
+                        const isClientIdVisible = visibleKeys[clientIdId];
+                        const isSecretKeyVisible = visibleKeys[secretKeyId];
+
+                        return (
+                          <tr key={setting.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-2">
+                                {isGlobal ? (
+                                  <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[11px] flex items-center gap-1">
+                                    🌐 Toàn Hệ Thống (Fallback)
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <span 
+                                      className={`px-2.5 py-1 rounded-lg border font-bold text-[11px] ${siteObj?.badgeBg || 'bg-slate-50 border-slate-200'} ${siteObj?.badgeText || 'text-slate-800'}`}
+                                    >
+                                      {siteObj?.name || setting.site_id}
+                                    </span>
+                                    {siteObj?.domain && (
+                                      <span className="text-[10px] text-slate-400 font-mono">({siteObj.domain})</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-6 font-bold text-slate-900">
+                              {setting.account_name}
+                            </td>
+                            <td className="py-4 px-6">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                                isLive 
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}>
+                                {isLive ? 'LIVE' : 'SANDBOX'}
+                              </span>
+                            </td>
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg w-fit">
+                                <span>
+                                  {isClientIdVisible 
+                                    ? setting.client_id 
+                                    : (setting.client_id ? `${setting.client_id.substring(0, 8)}••••••••` : 'None')}
+                                </span>
+                                {setting.client_id && (
+                                  <>
+                                    <button 
+                                      onClick={() => toggleKeyVisibility(clientIdId)}
+                                      className="p-1 hover:text-blue-600 text-slate-400 cursor-pointer"
+                                      title={isClientIdVisible ? "Ẩn Client ID" : "Xem Client ID"}
+                                    >
+                                      {isClientIdVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button 
+                                      onClick={() => handleCopyKey(setting.client_id, clientIdId)}
+                                      className="p-1 hover:text-blue-600 text-slate-400 cursor-pointer"
+                                      title="Sao chép Client ID"
+                                    >
+                                      {copiedKeyId === clientIdId ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                      ) : (
+                                        <Copy className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg w-fit">
+                                <span>
+                                  {isSecretKeyVisible 
+                                    ? setting.client_secret 
+                                    : (setting.client_secret ? `${setting.client_secret.substring(0, 6)}••••••••` : '••••••••')}
+                                </span>
+                                {setting.client_secret && (
+                                  <>
+                                    <button 
+                                      onClick={() => toggleKeyVisibility(secretKeyId)}
+                                      className="p-1 hover:text-blue-600 text-slate-400 cursor-pointer"
+                                      title={isSecretKeyVisible ? "Ẩn Secret Key" : "Xem Secret Key"}
+                                    >
+                                      {isSecretKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                    </button>
+                                    <button 
+                                      onClick={() => handleCopyKey(setting.client_secret, secretKeyId)}
+                                      className="p-1 hover:text-blue-600 text-slate-400 cursor-pointer"
+                                      title="Sao chép Secret Key"
+                                    >
+                                      {copiedKeyId === secretKeyId ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                      ) : (
+                                        <Copy className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-4 px-6 text-center">
+                              {setting.is_active ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <Check className="w-3.5 h-3.5" /> Đang Hoạt Động
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-400">
+                                  Chưa Kích Hoạt
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-4 px-6 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                {!setting.is_active && (
+                                  <button
+                                    onClick={() => handleActivatePayPalSetting(setting.id)}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg font-bold text-xs hover:bg-blue-700 transition-all flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Check className="w-3.5 h-3.5" /> Kích Hoạt
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => handleStartEditPayPalSetting(setting)}
+                                  className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all cursor-pointer"
+                                  title="Edit Configuration"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeletePayPalSetting(setting.id)}
+                                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                  title="Delete Configuration"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add / Edit Stripe Account Modal */}
@@ -1597,6 +1960,208 @@ export default function BookManagePage() {
                 >
                   {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
                   Lưu Cổng Stripe
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit PayPal Account Modal */}
+      {isPayPalModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-blue-50 text-[#0079C1] flex items-center justify-center font-extrabold text-sm border border-blue-200">
+                  P
+                </span>
+                {editingPayPalSetting ? "Sửa Tài Khoản PayPal" : "Thêm Cổng PayPal Mới"}
+              </h2>
+              <button onClick={() => setIsPayPalModalOpen(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddPayPalSettingSubmit} className="p-8 space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Website Áp Dụng Cổng PayPal Này</label>
+                <select
+                  required
+                  value={paypalFormData.site_id}
+                  onChange={(e) => {
+                    const chosen = e.target.value;
+                    const siteObj = STOREFRONTS.find(s => s.id === chosen);
+                    setPaypalFormData({
+                      ...paypalFormData,
+                      site_id: chosen,
+                      account_name: paypalFormData.account_name || (siteObj ? `${siteObj.name} PayPal Gateway` : "")
+                    });
+                  }}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-slate-800 text-sm font-semibold bg-white"
+                >
+                  {STOREFRONTS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.domain})
+                    </option>
+                  ))}
+                  <option value="all">🌐 Dùng Chung Cho Tất Cả Website (Fallback)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Tên Gợi Nhớ (Account Label)</label>
+                <input 
+                  required
+                  type="text" 
+                  placeholder="Ví dụ: BookBazaar Main PayPal Account"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none text-slate-800 text-sm"
+                  value={paypalFormData.account_name}
+                  onChange={(e) => setPaypalFormData({...paypalFormData, account_name: e.target.value})}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">Môi Trường Hoạt Động (Environment)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPaypalFormData({ ...paypalFormData, mode: 'live' })}
+                    className={`px-4 py-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      paypalFormData.mode === 'live'
+                        ? 'border-emerald-500 bg-emerald-50 text-emerald-800 shadow-xs'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    LIVE (Thanh Toán Thật)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaypalFormData({ ...paypalFormData, mode: 'sandbox' })}
+                    className={`px-4 py-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                      paypalFormData.mode === 'sandbox'
+                        ? 'border-amber-500 bg-amber-50 text-amber-800 shadow-xs'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-600'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                    SANDBOX (Thử Nghiệm)
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">Client ID (REST API App Client ID)</label>
+                  {paypalFormData.client_id && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyKey(paypalFormData.client_id, 'modal_paypal_cid')}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedKeyId === 'modal_paypal_cid' ? (
+                        <span className="text-emerald-600 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> Đã chép Client ID
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Copy className="w-3.5 h-3.5" /> Sao chép Client ID
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input 
+                    required
+                    type={showModalPayPalClientId ? "text" : "password"} 
+                    placeholder="PayPal Client ID..."
+                    className="w-full pl-4 pr-11 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-mono text-xs text-slate-800"
+                    value={paypalFormData.client_id}
+                    onChange={(e) => setPaypalFormData({...paypalFormData, client_id: e.target.value})}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowModalPayPalClientId(!showModalPayPalClientId)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-blue-600 rounded-lg cursor-pointer transition-colors"
+                    title={showModalPayPalClientId ? "Ẩn Client ID" : "Xem Client ID"}
+                  >
+                    {showModalPayPalClientId ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700">Secret Key / Client Secret</label>
+                  {paypalFormData.client_secret && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyKey(paypalFormData.client_secret, 'modal_paypal_sec')}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedKeyId === 'modal_paypal_sec' ? (
+                        <span className="text-emerald-600 flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> Đã chép Secret
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <Copy className="w-3.5 h-3.5" /> Sao chép Secret
+                        </span>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input 
+                    required
+                    type={showModalPayPalSecret ? "text" : "password"} 
+                    placeholder="PayPal Secret Key..."
+                    className="w-full pl-4 pr-11 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-mono text-xs text-slate-800"
+                    value={paypalFormData.client_secret}
+                    onChange={(e) => setPaypalFormData({...paypalFormData, client_secret: e.target.value})}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowModalPayPalSecret(!showModalPayPalSecret)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-blue-600 rounded-lg cursor-pointer transition-colors"
+                    title={showModalPayPalSecret ? "Ẩn Secret Key" : "Xem Secret Key"}
+                  >
+                    {showModalPayPalSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">Client ID & Secret được lưu trữ bảo mật để xử lý các yêu cầu PayPal Checkout.</p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <input 
+                  type="checkbox"
+                  id="paypal_is_active_checkbox"
+                  checked={paypalFormData.is_active}
+                  onChange={(e) => setPaypalFormData({...paypalFormData, is_active: e.target.checked})}
+                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <label htmlFor="paypal_is_active_checkbox" className="text-xs font-bold text-slate-700 cursor-pointer">
+                  Kích hoạt cổng này làm cổng PayPal nhận tiền chính của website ngay lập tức
+                </label>
+              </div>
+
+              <div className="pt-4 flex gap-4 border-t border-slate-100">
+                <button 
+                  type="button" 
+                  onClick={() => setIsPayPalModalOpen(false)}
+                  className="flex-1 px-6 py-3.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs"
+                >
+                  Hủy
+                </button>
+                <button 
+                  disabled={isSubmitting}
+                  type="submit" 
+                  className="flex-2 px-8 py-3.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-200 disabled:opacity-50 flex items-center justify-center gap-2 text-xs"
+                >
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Lưu Cổng PayPal
                 </button>
               </div>
             </form>
