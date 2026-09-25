@@ -358,3 +358,146 @@ export const cleanupExpiredOrders = async () => {
     return api.post('/orders/cleanup-expired');
   }
 };
+
+// ==========================================
+// WHOP MANAGEMENT API & INTERFACES
+// ==========================================
+export interface WhopUser {
+  id: string;
+  name: string;
+  slug?: string;
+  description?: string;
+  color?: string;
+  sort_order?: number;
+  created_at?: string;
+}
+
+export interface WhopLink {
+  id: string;
+  user_id: string;
+  user_name?: string;
+  title: string;
+  url: string;
+  price?: string;
+  category?: string;
+  description?: string;
+  image_url?: string;
+  site_name?: string;
+  site_id?: string;
+  clicks_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export const getWhopLinkPreview = async (url: string) => {
+  try {
+    const res = await fetch(`/api/preview?url=${encodeURIComponent(url)}`);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Frontend preview fetch error:', err);
+  }
+  return {
+    url,
+    title: url.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+    description: '',
+    image: '',
+    site_name: 'Whop'
+  };
+};
+
+export const getWhopUsers = async () => {
+  try {
+    const { fetchWhopUsersDirect } = await import('./supabase');
+    const res = await fetchWhopUsersDirect();
+    return { data: res };
+  } catch {
+    return api.get<WhopUser[]>('/whop/users');
+  }
+};
+
+export const createWhopUser = async (data: Partial<WhopUser>) => {
+  try {
+    const { createWhopUserDirect } = await import('./supabase');
+    const res = await createWhopUserDirect(data);
+    return { data: res };
+  } catch {
+    return api.post<WhopUser>('/whop/users', data);
+  }
+};
+
+export const updateWhopUser = async (id: string, data: Partial<WhopUser>) => {
+  try {
+    const { updateWhopUserDirect } = await import('./supabase');
+    const res = await updateWhopUserDirect(id, data);
+    return { data: res };
+  } catch {
+    return api.put<WhopUser>(`/whop/users/${id}`, data);
+  }
+};
+
+export const deleteWhopUser = async (id: string) => {
+  try {
+    const { deleteWhopUserDirect } = await import('./supabase');
+    await deleteWhopUserDirect(id);
+    return { data: { message: 'Whop user deleted' } };
+  } catch {
+    return api.delete(`/whop/users/${id}`);
+  }
+};
+
+export const getWhopLinks = async (userId?: string, siteId?: string, category?: string, search?: string) => {
+  try {
+    const { fetchWhopLinksDirect } = await import('./supabase');
+    const res = await fetchWhopLinksDirect(userId, siteId, category, search);
+    return { data: res };
+  } catch {
+    const params: any = {};
+    if (userId && userId !== 'all') params.user_id = userId;
+    if (siteId && siteId !== 'all') params.site = siteId;
+    if (category && category !== 'all') params.category = category;
+    if (search && search.trim()) params.search = search;
+    return api.get<WhopLink[]>('/whop/links', { params });
+  }
+};
+
+export const createWhopLink = async (data: Partial<WhopLink>) => {
+  try {
+    const { createWhopLinkDirect } = await import('./supabase');
+    const res = await createWhopLinkDirect(data);
+    return { data: res };
+  } catch {
+    return api.post<WhopLink>('/whop/links', data);
+  }
+};
+
+export const updateWhopLink = async (id: string, data: Partial<WhopLink>) => {
+  try {
+    const { updateWhopLinkDirect } = await import('./supabase');
+    const res = await updateWhopLinkDirect(id, data);
+    return { data: res };
+  } catch {
+    return api.put<WhopLink>(`/whop/links/${id}`, data);
+  }
+};
+
+export const deleteWhopLink = async (id: string) => {
+  try {
+    const { deleteWhopLinkDirect } = await import('./supabase');
+    await deleteWhopLinkDirect(id);
+    return { data: { message: 'Whop link deleted' } };
+  } catch {
+    return api.delete(`/whop/links/${id}`);
+  }
+};
+
+export const trackWhopLinkClick = async (id: string) => {
+  try {
+    const { trackWhopLinkClickDirect } = await import('./supabase');
+    await trackWhopLinkClickDirect(id);
+  } catch {
+    api.post(`/whop/links/${id}/click`).catch(() => {});
+  }
+};
+
