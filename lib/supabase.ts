@@ -701,3 +701,368 @@ export async function cleanupExpiredOrdersDirect(): Promise<{ deleted_count: num
   }
   return { deleted_count: data ? data.length : 0 };
 }
+
+// ==========================================
+// WHOP DIRECT OPERATIONS (0 Vercel FOT)
+// ==========================================
+
+const DEFAULT_WHOP_USERS = [
+  { id: 'whop-user-1', name: 'User 1', slug: 'user-1', description: 'Tài khoản Whop chính 1', color: '#FF6243', sort_order: 1, created_at: new Date().toISOString() },
+  { id: 'whop-user-2', name: 'User 2', slug: 'user-2', description: 'Tài khoản Whop phụ 2', color: '#6366F1', sort_order: 2, created_at: new Date().toISOString() }
+];
+
+const DEFAULT_WHOP_LINKS = [
+  {
+    id: 'link-sample-1',
+    user_id: 'whop-user-1',
+    user_name: 'User 1',
+    title: 'Gói Ebook VIP & Tài Liệu Độc Quyền',
+    url: 'https://whop.com/checkout/plan_sample1',
+    price: '$29.00',
+    category: 'Ebook & Tài Liệu',
+    description: 'Truy cập toàn bộ kho sách điện tử cao cấp',
+    site_id: 'all',
+    clicks_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  },
+  {
+    id: 'link-sample-2',
+    user_id: 'whop-user-2',
+    user_name: 'User 2',
+    title: 'Membership Khóa Học Kinh Doanh & Marketing',
+    url: 'https://whop.com/checkout/plan_sample2',
+    price: '$49.00',
+    category: 'Khóa Học VIP',
+    description: 'Gói thành viên truy cập hàng tháng',
+    site_id: 'all',
+    clicks_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }
+];
+
+// Helper to get local stored fallback data
+function getLocalWhopUsers(): any[] {
+  if (typeof window === 'undefined') return DEFAULT_WHOP_USERS;
+  try {
+    const raw = localStorage.getItem('bm_whop_users');
+    return raw ? JSON.parse(raw) : DEFAULT_WHOP_USERS;
+  } catch {
+    return DEFAULT_WHOP_USERS;
+  }
+}
+
+function saveLocalWhopUsers(users: any[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('bm_whop_users', JSON.stringify(users));
+  } catch {}
+}
+
+function getLocalWhopLinks(): any[] {
+  if (typeof window === 'undefined') return DEFAULT_WHOP_LINKS;
+  try {
+    const raw = localStorage.getItem('bm_whop_links');
+    return raw ? JSON.parse(raw) : DEFAULT_WHOP_LINKS;
+  } catch {
+    return DEFAULT_WHOP_LINKS;
+  }
+}
+
+function saveLocalWhopLinks(links: any[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('bm_whop_links', JSON.stringify(links));
+  } catch {}
+}
+
+// 1. Fetch Whop Users
+export async function fetchWhopUsersDirect(): Promise<any[]> {
+  try {
+    const { data, error } = await supabase
+      .from('whop_users')
+      .select('*')
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (!error && data && data.length > 0) {
+      saveLocalWhopUsers(data);
+      return data;
+    }
+  } catch (err: any) {
+    console.warn('fetchWhopUsersDirect error, falling back:', err?.message);
+  }
+  return getLocalWhopUsers();
+}
+
+// 2. Create Whop User
+export async function createWhopUserDirect(data: any): Promise<any> {
+  const localList = getLocalWhopUsers();
+  const newUser = {
+    name: (data.name || 'User Mới').trim(),
+    slug: data.slug || data.name?.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || `user-${Date.now()}`,
+    description: data.description || '',
+    color: data.color || '#FF6243',
+    sort_order: data.sort_order !== undefined ? Number(data.sort_order) : localList.length + 1,
+  };
+
+  try {
+    const { data: res, error } = await supabase
+      .from('whop_users')
+      .insert([newUser])
+      .select();
+
+    if (!error && res && res.length > 0) {
+      const created = res[0];
+      saveLocalWhopUsers([...localList, created]);
+      return created;
+    }
+  } catch (err: any) {
+    console.warn('createWhopUserDirect db error:', err?.message);
+  }
+
+  const fallbackUser = {
+    id: `whop-user-${Date.now()}`,
+    ...newUser,
+    created_at: new Date().toISOString()
+  };
+  saveLocalWhopUsers([...localList, fallbackUser]);
+  return fallbackUser;
+}
+
+// 3. Update Whop User
+export async function updateWhopUserDirect(id: string, data: any): Promise<any> {
+  const localList = getLocalWhopUsers();
+  const updates: any = {};
+  if (data.name !== undefined) updates.name = data.name.trim();
+  if (data.slug !== undefined) updates.slug = data.slug;
+  if (data.description !== undefined) updates.description = data.description;
+  if (data.color !== undefined) updates.color = data.color;
+  if (data.sort_order !== undefined) updates.sort_order = Number(data.sort_order);
+
+  try {
+    const { data: res, error } = await supabase
+      .from('whop_users')
+      .update(updates)
+      .eq('id', id)
+      .select();
+
+    if (!error && res && res.length > 0) {
+      const updated = res[0];
+      saveLocalWhopUsers(localList.map(u => u.id === id ? updated : u));
+      return updated;
+    }
+  } catch (err: any) {
+    console.warn('updateWhopUserDirect db error:', err?.message);
+  }
+
+  const updatedLocal = localList.map(u => u.id === id ? { ...u, ...updates } : u);
+  saveLocalWhopUsers(updatedLocal);
+  return updatedLocal.find(u => u.id === id) || { id, ...updates };
+}
+
+// 4. Delete Whop User
+export async function deleteWhopUserDirect(id: string): Promise<void> {
+  try {
+    await supabase.from('whop_links').delete().eq('user_id', id);
+    await supabase.from('whop_users').delete().eq('id', id);
+  } catch (err: any) {
+    console.warn('deleteWhopUserDirect db error:', err?.message);
+  }
+
+  const localList = getLocalWhopUsers().filter(u => u.id !== id);
+  saveLocalWhopUsers(localList);
+
+  const localLinks = getLocalWhopLinks().filter(l => l.user_id !== id);
+  saveLocalWhopLinks(localLinks);
+}
+
+// 5. Fetch Whop Links
+export async function fetchWhopLinksDirect(
+  userId?: string,
+  siteId?: string,
+  category?: string,
+  search?: string
+): Promise<any[]> {
+  try {
+    let query = supabase
+      .from('whop_links')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (userId && userId !== 'all') {
+      query = query.eq('user_id', userId);
+    }
+    if (siteId && siteId !== 'all') {
+      query = query.or(`site_id.eq.${siteId},site_id.eq.all`);
+    }
+    if (category && category !== 'all') {
+      query = query.eq('category', category);
+    }
+
+    const { data, error } = await query;
+    if (!error && data) {
+      saveLocalWhopLinks(data);
+      let result = data;
+      if (search && search.trim()) {
+        const s = search.toLowerCase().trim();
+        result = result.filter(l => 
+          (l.title && l.title.toLowerCase().includes(s)) ||
+          (l.url && l.url.toLowerCase().includes(s)) ||
+          (l.category && l.category.toLowerCase().includes(s)) ||
+          (l.description && l.description.toLowerCase().includes(s))
+        );
+      }
+      return result;
+    }
+  } catch (err: any) {
+    console.warn('fetchWhopLinksDirect db error:', err?.message);
+  }
+
+  let local = getLocalWhopLinks();
+  if (userId && userId !== 'all') {
+    local = local.filter(l => l.user_id === userId);
+  }
+  if (siteId && siteId !== 'all') {
+    local = local.filter(l => !l.site_id || l.site_id === 'all' || l.site_id === siteId);
+  }
+  if (category && category !== 'all') {
+    local = local.filter(l => l.category === category);
+  }
+  if (search && search.trim()) {
+    const s = search.toLowerCase().trim();
+    local = local.filter(l => 
+      (l.title && l.title.toLowerCase().includes(s)) ||
+      (l.url && l.url.toLowerCase().includes(s)) ||
+      (l.category && l.category.toLowerCase().includes(s)) ||
+      (l.description && l.description.toLowerCase().includes(s))
+    );
+  }
+  return local.sort((a, b) => {
+    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return timeB - timeA;
+  });
+}
+
+// 6. Create Whop Link
+export async function createWhopLinkDirect(data: any): Promise<any> {
+  const localLinks = getLocalWhopLinks();
+  let formattedUrl = (data.url || '').trim();
+  if (formattedUrl && !formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+    formattedUrl = `https://${formattedUrl}`;
+  }
+
+  const newLink = {
+    user_id: data.user_id || 'whop-user-1',
+    user_name: data.user_name || '',
+    title: (data.title || '').trim(),
+    url: formattedUrl,
+    price: (data.price || '').trim(),
+    category: (data.category || 'Khác').trim(),
+    description: (data.description || '').trim(),
+    image_url: (data.image_url || '').trim(),
+    site_name: (data.site_name || 'Whop').trim(),
+    site_id: data.site_id || 'all',
+    clicks_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  try {
+    const { data: res, error } = await supabase
+      .from('whop_links')
+      .insert([newLink])
+      .select();
+
+    if (!error && res && res.length > 0) {
+      const created = res[0];
+      saveLocalWhopLinks([created, ...localLinks]);
+      return created;
+    }
+  } catch (err: any) {
+    console.warn('createWhopLinkDirect db error:', err?.message);
+  }
+
+  const fallbackLink = {
+    id: `whop-link-${Date.now()}`,
+    ...newLink
+  };
+  saveLocalWhopLinks([fallbackLink, ...localLinks]);
+  return fallbackLink;
+}
+
+// 7. Update Whop Link
+export async function updateWhopLinkDirect(id: string, data: any): Promise<any> {
+  const localLinks = getLocalWhopLinks();
+  const updates: any = {
+    updated_at: new Date().toISOString()
+  };
+  if (data.user_id !== undefined) updates.user_id = data.user_id;
+  if (data.user_name !== undefined) updates.user_name = data.user_name;
+  if (data.title !== undefined) updates.title = data.title.trim();
+  if (data.url !== undefined) {
+    let formattedUrl = data.url.trim();
+    if (formattedUrl && !formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    updates.url = formattedUrl;
+  }
+  if (data.price !== undefined) updates.price = data.price.trim();
+  if (data.category !== undefined) updates.category = data.category.trim();
+  if (data.description !== undefined) updates.description = data.description.trim();
+  if (data.image_url !== undefined) updates.image_url = data.image_url.trim();
+  if (data.site_name !== undefined) updates.site_name = data.site_name.trim();
+  if (data.site_id !== undefined) updates.site_id = data.site_id;
+
+  try {
+    const { data: res, error } = await supabase
+      .from('whop_links')
+      .update(updates)
+      .eq('id', id)
+      .select();
+
+    if (!error && res && res.length > 0) {
+      const updated = res[0];
+      saveLocalWhopLinks(localLinks.map(l => l.id === id ? updated : l));
+      return updated;
+    }
+  } catch (err: any) {
+    console.warn('updateWhopLinkDirect db error:', err?.message);
+  }
+
+  const updatedList = localLinks.map(l => l.id === id ? { ...l, ...updates } : l);
+  saveLocalWhopLinks(updatedList);
+  return updatedList.find(l => l.id === id) || { id, ...updates };
+}
+
+// 8. Delete Whop Link
+export async function deleteWhopLinkDirect(id: string): Promise<void> {
+  try {
+    await supabase.from('whop_links').delete().eq('id', id);
+  } catch (err: any) {
+    console.warn('deleteWhopLinkDirect db error:', err?.message);
+  }
+
+  const localLinks = getLocalWhopLinks().filter(l => l.id !== id);
+  saveLocalWhopLinks(localLinks);
+}
+
+// 9. Track Link Click
+export async function trackWhopLinkClickDirect(id: string): Promise<void> {
+  try {
+    const { data: current } = await supabase.from('whop_links').select('clicks_count').eq('id', id).single();
+    const currentCount = current ? (current.clicks_count || 0) : 0;
+    await supabase.from('whop_links').update({ clicks_count: currentCount + 1 }).eq('id', id);
+  } catch {}
+
+  const localLinks = getLocalWhopLinks().map(l => {
+    if (l.id === id) {
+      return { ...l, clicks_count: (l.clicks_count || 0) + 1 };
+    }
+    return l;
+  });
+  saveLocalWhopLinks(localLinks);
+}
+

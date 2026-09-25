@@ -47,7 +47,22 @@ import {
   ShoppingBag,
   Receipt,
   PackageCheck,
-  PackageX
+  PackageX,
+  Users,
+  UserPlus,
+  ArrowUpRight,
+  Link2,
+  Share2,
+  LayoutGrid,
+  ListFilter,
+  Flame,
+  UserCheck,
+  Palette,
+  Lock,
+  Unlock,
+  LogIn,
+  LogOut,
+  Shield
 } from "lucide-react";
 import { 
   getBooks, 
@@ -79,7 +94,19 @@ import {
   deleteOrder,
   cleanupExpiredOrders,
   STOREFRONTS, 
-  StorefrontSite 
+  StorefrontSite,
+  WhopUser,
+  WhopLink,
+  getWhopUsers,
+  createWhopUser,
+  updateWhopUser,
+  deleteWhopUser,
+  getWhopLinks,
+  createWhopLink,
+  updateWhopLink,
+  deleteWhopLink,
+  trackWhopLinkClick,
+  getWhopLinkPreview
 } from "@/lib/api";
 import { 
   uploadBookFileDirect, 
@@ -108,7 +135,16 @@ import {
   fetchOrdersDirect,
   updateOrderStatusDirect,
   deleteOrderDirect,
-  cleanupExpiredOrdersDirect
+  cleanupExpiredOrdersDirect,
+  fetchWhopUsersDirect,
+  createWhopUserDirect,
+  updateWhopUserDirect,
+  deleteWhopUserDirect,
+  fetchWhopLinksDirect,
+  createWhopLinkDirect,
+  updateWhopLinkDirect,
+  deleteWhopLinkDirect,
+  trackWhopLinkClickDirect
 } from "@/lib/supabase";
 import { parseEpubFile, cleanExtractedDescription } from "@/lib/epubParser";
 
@@ -154,7 +190,7 @@ function getBalancedCategories(count: number, pool: string[]): string[] {
 }
 
 export default function BookManagePage() {
-  const [activeTab, setActiveTab] = useState<'books' | 'stripe' | 'paypal' | 'tickets' | 'orders'>('books');
+  const [activeTab, setActiveTab] = useState<'books' | 'stripe' | 'paypal' | 'tickets' | 'orders' | 'whop'>('books');
   const [selectedSite, setSelectedSite] = useState<string>('bookpatr');
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -162,6 +198,87 @@ export default function BookManagePage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Whop Management states
+  const [whopUsers, setWhopUsers] = useState<WhopUser[]>([]);
+  const [whopLinks, setWhopLinks] = useState<WhopLink[]>([]);
+  const [whopLoading, setWhopLoading] = useState(false);
+  const [selectedWhopUser, setSelectedWhopUser] = useState<string>('');
+  const [whopSearchTerm, setWhopSearchTerm] = useState<string>('');
+  const [selectedWhopCategory, setSelectedWhopCategory] = useState<string>('all');
+  const [whopViewMode, setWhopViewMode] = useState<'grid' | 'table'>('grid');
+
+  // Whop Link modal
+  const [isWhopLinkModalOpen, setIsWhopLinkModalOpen] = useState(false);
+  const [editingWhopLink, setEditingWhopLink] = useState<WhopLink | null>(null);
+  const [whopLinkFormData, setWhopLinkFormData] = useState({
+    user_id: '',
+    title: '',
+    url: '',
+    price: '',
+    category: 'Khóa Học VIP',
+    description: '',
+    site_id: 'all'
+  });
+
+  // Whop User modal
+  const [isWhopUserModalOpen, setIsWhopUserModalOpen] = useState(false);
+  const [editingWhopUser, setEditingWhopUser] = useState<WhopUser | null>(null);
+  const [whopUserFormData, setWhopUserFormData] = useState({
+    name: '',
+    description: '',
+    color: '#FF6243'
+  });
+  const [copiedWhopLinkId, setCopiedWhopLinkId] = useState<string | null>(null);
+
+  // Admin Authentication State
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
+  const [loginUsername, setLoginUsername] = useState<string>("lichdt");
+  const [loginPassword, setLoginPassword] = useState<string>("");
+  const [showLoginPassword, setShowLoginPassword] = useState<boolean>(false);
+  const [loginError, setLoginError] = useState<string>("");
+
+  // Sync admin login state from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedAuth = localStorage.getItem('bookmanage_admin_auth');
+      if (savedAuth === 'true') {
+        setIsAdminLoggedIn(true);
+      } else {
+        setIsAdminLoggedIn(false);
+        setActiveTab('whop');
+      }
+    } catch {
+      setIsAdminLoggedIn(false);
+      setActiveTab('whop');
+    }
+  }, []);
+
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    if (loginUsername.trim() === 'lichdt' && loginPassword === '389363') {
+      setIsAdminLoggedIn(true);
+      try {
+        localStorage.setItem('bookmanage_admin_auth', 'true');
+      } catch {}
+      setIsLoginModalOpen(false);
+      setLoginPassword("");
+    } else {
+      setLoginError("Tài khoản hoặc mật khẩu không chính xác. (Tài khoản: lichdt, Mật khẩu: 389363)");
+    }
+  };
+
+  const handleLogout = () => {
+    if (confirm("Bạn có chắc chắn muốn đăng xuất tài khoản quản trị?")) {
+      setIsAdminLoggedIn(false);
+      try {
+        localStorage.removeItem('bookmanage_admin_auth');
+      } catch {}
+      setActiveTab('whop');
+    }
+  };
 
   // Customer Orders states
   const [orders, setOrders] = useState<Order[]>([]);
@@ -299,6 +416,7 @@ export default function BookManagePage() {
     fetchPayPalSettings();
     fetchTickets();
     fetchOrders();
+    fetchWhopData();
   }, [selectedSite, orderStatusFilter]);
 
   const fetchBooks = async () => {
@@ -359,6 +477,34 @@ export default function BookManagePage() {
       console.error("Failed to fetch orders:", error);
     } finally {
       setOrdersLoading(false);
+    }
+  };
+
+  const fetchWhopData = async () => {
+    setWhopLoading(true);
+    try {
+      const [uRes, lRes] = await Promise.all([
+        getWhopUsers(),
+        getWhopLinks(undefined, selectedSite)
+      ]);
+      const users = uRes.data || [];
+      const links = (lRes.data || []).sort((a: any, b: any) => {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeB - timeA;
+      });
+      setWhopUsers(users);
+      setWhopLinks(links);
+      setSelectedWhopUser(prev => {
+        if (!prev || prev === 'all' || !users.some(u => u.id === prev)) {
+          return users[0]?.id || '';
+        }
+        return prev;
+      });
+    } catch (error) {
+      console.error("Failed to fetch Whop data:", error);
+    } finally {
+      setWhopLoading(false);
     }
   };
 
@@ -461,6 +607,287 @@ export default function BookManagePage() {
 
   const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
   const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
+
+  // Whop Filtered Links for Active User (Newest First)
+  const filteredWhopLinks = useMemo(() => {
+    let list = whopLinks;
+    const activeUserId = selectedWhopUser || whopUsers[0]?.id;
+    if (activeUserId) {
+      list = list.filter(l => l.user_id === activeUserId);
+    }
+    // Always guarantee newest link is at the top
+    return [...list].sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return timeB - timeA;
+    });
+  }, [whopLinks, selectedWhopUser, whopUsers]);
+
+  const whopCategories = useMemo(() => {
+    const list = Array.from(new Set(whopLinks.map(l => l.category).filter(Boolean) as string[]));
+    return list.sort();
+  }, [whopLinks]);
+
+  // Whop Quick Add State & Auto OpenGraph Preview
+  const [quickWhopUrl, setQuickWhopUrl] = useState("");
+  const [quickWhopTitle, setQuickWhopTitle] = useState("");
+  const [quickWhopPreview, setQuickWhopPreview] = useState<{
+    title: string;
+    description: string;
+    image: string;
+    site_name: string;
+    url: string;
+  } | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  // Debounced auto-fetch rich preview when user pastes / types Whop URL
+  useEffect(() => {
+    const trimmed = quickWhopUrl.trim();
+    if (!trimmed || (!trimmed.includes('.') && !trimmed.startsWith('http'))) {
+      setQuickWhopPreview(null);
+      setIsPreviewLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsPreviewLoading(true);
+
+    const timer = setTimeout(async () => {
+      try {
+        const preview = await getWhopLinkPreview(trimmed);
+        if (isMounted && preview) {
+          setQuickWhopPreview(preview);
+        }
+      } catch (err) {
+        console.warn('Preview auto-fetch failed:', err);
+      } finally {
+        if (isMounted) setIsPreviewLoading(false);
+      }
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [quickWhopUrl]);
+
+  const handleQuickAddWhopLink = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!quickWhopUrl.trim()) return;
+
+    const targetUserId = selectedWhopUser !== 'all' ? selectedWhopUser : (whopUsers[0]?.id || 'whop-user-1');
+    const assignedUser = whopUsers.find(u => u.id === targetUserId);
+
+    let formattedUrl = quickWhopUrl.trim();
+    if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+
+    // Use fetched preview if available, otherwise quick fetch
+    let previewData = quickWhopPreview;
+    if (!previewData || previewData.url !== formattedUrl) {
+      try {
+        previewData = await getWhopLinkPreview(formattedUrl);
+      } catch {}
+    }
+
+    const title = quickWhopTitle.trim() || previewData?.title || formattedUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const description = previewData?.description || '';
+    const imageUrl = previewData?.image || '';
+    const siteName = previewData?.site_name || 'Whop';
+
+    setIsSubmitting(true);
+    try {
+      await createWhopLink({
+        user_id: targetUserId,
+        user_name: assignedUser ? assignedUser.name : 'User',
+        url: formattedUrl,
+        title: title,
+        description: description,
+        image_url: imageUrl,
+        site_name: siteName,
+        site_id: selectedSite !== 'all' ? selectedSite : 'all'
+      });
+      setQuickWhopUrl("");
+      setQuickWhopTitle("");
+      setQuickWhopPreview(null);
+      await fetchWhopData();
+    } catch (err: any) {
+      console.error("Failed to quick add Whop link:", err);
+      alert("Không thể thêm link Whop.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Whop Link Handlers
+  const handleStartAddWhopLink = (userId?: string) => {
+    const defaultUserId = userId || (selectedWhopUser !== 'all' ? selectedWhopUser : (whopUsers[0]?.id || 'whop-user-1'));
+    setEditingWhopLink(null);
+    setWhopLinkFormData({
+      user_id: defaultUserId,
+      title: '',
+      url: '',
+      price: '',
+      category: '',
+      description: '',
+      site_id: selectedSite !== 'all' ? selectedSite : 'all'
+    });
+    setIsWhopLinkModalOpen(true);
+  };
+
+  const handleStartEditWhopLink = (link: WhopLink) => {
+    setEditingWhopLink(link);
+    setWhopLinkFormData({
+      user_id: link.user_id || (whopUsers[0]?.id || ''),
+      title: link.title || '',
+      url: link.url,
+      price: '',
+      category: '',
+      description: '',
+      site_id: link.site_id || 'all'
+    });
+    setIsWhopLinkModalOpen(true);
+  };
+
+  const handleSaveWhopLinkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!whopLinkFormData.url.trim()) {
+      alert("Vui lòng nhập đường link Whop.");
+      return;
+    }
+
+    let formattedUrl = whopLinkFormData.url.trim();
+    if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+
+    const assignedUser = whopUsers.find(u => u.id === whopLinkFormData.user_id);
+    const finalTitle = whopLinkFormData.title.trim() || formattedUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+    const payload = {
+      user_id: whopLinkFormData.user_id || (whopUsers[0]?.id || 'whop-user-1'),
+      user_name: assignedUser ? assignedUser.name : 'User',
+      url: formattedUrl,
+      title: finalTitle,
+      site_id: whopLinkFormData.site_id || 'all'
+    };
+
+    setIsSubmitting(true);
+    try {
+      if (editingWhopLink) {
+        await updateWhopLink(editingWhopLink.id, payload);
+      } else {
+        await createWhopLink(payload);
+      }
+      await fetchWhopData();
+      setIsWhopLinkModalOpen(false);
+      setEditingWhopLink(null);
+    } catch (err: any) {
+      console.error("Failed to save Whop link:", err);
+      alert(err.message || "Không thể lưu link Whop.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteWhopLink = async (id: string) => {
+    if (!confirm("Bạn có chắc chắn muốn xóa link Whop này?")) return;
+    try {
+      await deleteWhopLink(id);
+      await fetchWhopData();
+    } catch (err) {
+      alert("Không thể xóa link Whop.");
+    }
+  };
+
+  const handleOpenWhopLink = (link: WhopLink) => {
+    if (!link.url) return;
+    let url = link.url.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    trackWhopLinkClick(link.id);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleCopyWhopLink = async (link: WhopLink) => {
+    if (!link.url) return;
+    let url = link.url.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedWhopLinkId(link.id);
+      setTimeout(() => {
+        setCopiedWhopLinkId(prev => (prev === link.id ? null : prev));
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+    }
+  };
+
+  // Whop User Handlers
+  const handleStartAddWhopUser = () => {
+    setEditingWhopUser(null);
+    setWhopUserFormData({
+      name: `User ${whopUsers.length + 1}`,
+      description: '',
+      color: ['#FF6243', '#6366F1', '#10B981', '#0EA5E9', '#8B5CF6', '#F43F5E', '#F59E0B'][whopUsers.length % 7]
+    });
+    setIsWhopUserModalOpen(true);
+  };
+
+  const handleStartEditWhopUser = (user: WhopUser) => {
+    setEditingWhopUser(user);
+    setWhopUserFormData({
+      name: user.name,
+      description: user.description || '',
+      color: user.color || '#FF6243'
+    });
+    setIsWhopUserModalOpen(true);
+  };
+
+  const handleSaveWhopUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!whopUserFormData.name.trim()) {
+      alert("Vui lòng nhập tên User Whop.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      if (editingWhopUser) {
+        await updateWhopUser(editingWhopUser.id, whopUserFormData);
+      } else {
+        const created = await createWhopUser(whopUserFormData);
+        if (created?.data?.id) {
+          setSelectedWhopUser(created.data.id);
+        }
+      }
+      await fetchWhopData();
+      setIsWhopUserModalOpen(false);
+      setEditingWhopUser(null);
+    } catch (err: any) {
+      console.error("Failed to save Whop user:", err);
+      alert(err.message || "Không thể lưu User Whop.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteWhopUser = async (id: string, name: string) => {
+    if (!confirm(`Bạn có chắc chắn muốn xóa tab "${name}" và toàn bộ các link của user này không?`)) return;
+    try {
+      await deleteWhopUser(id);
+      if (selectedWhopUser === id) {
+        setSelectedWhopUser('all');
+      }
+      await fetchWhopData();
+    } catch (err) {
+      alert("Không thể xóa User Whop.");
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this book?")) return;
@@ -1037,231 +1464,267 @@ export default function BookManagePage() {
             </div>
           </div>
 
-          {/* CUSTOM SEARCHABLE WEBSITE SELECTOR DROPDOWN */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
-            <div className="relative flex-grow sm:w-84" ref={dropdownRef}>
-              <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                Chọn Website Cần Quản Lý:
-              </label>
+          {/* RIGHT SIDE: ADMIN CONTROLS OR GUEST LOGIN */}
+          {isAdminLoggedIn ? (
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3 w-full lg:w-auto">
+              {/* CUSTOM SEARCHABLE WEBSITE SELECTOR DROPDOWN */}
+              <div className="relative flex-grow sm:w-80" ref={dropdownRef}>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Chọn Website Cần Quản Lý:
+                </label>
 
-              {/* Dropdown Trigger Button */}
-              <button
-                type="button"
-                onClick={() => setIsSiteDropdownOpen(!isSiteDropdownOpen)}
-                className="w-full px-4 py-2.5 rounded-2xl border-2 border-indigo-600 bg-white hover:bg-indigo-50/40 text-slate-900 font-bold text-xs sm:text-sm flex items-center justify-between gap-3 shadow-xs transition-all focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5 truncate">
-                  {selectedSite === 'all' ? (
-                    <>
-                      <div className="w-7 h-7 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center flex-shrink-0">
-                        <Globe className="w-4 h-4" />
-                      </div>
-                      <div className="text-left truncate">
-                        <span className="font-bold text-indigo-950 block text-xs sm:text-sm truncate">Tất cả {STOREFRONTS.length} Website</span>
-                        <span className="text-[10px] text-slate-400 font-normal block">Xem tổng hợp danh mục</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div 
-                        className="w-7 h-7 rounded-xl flex items-center justify-center text-white font-black text-xs flex-shrink-0 shadow-xs"
-                        style={{ backgroundColor: currentStorefront?.themeColor || '#4F46E5' }}
-                      >
-                        {currentStorefront?.name.substring(0, 2).toUpperCase() || 'WB'}
-                      </div>
-                      <div className="text-left truncate">
-                        <span className="font-bold text-slate-900 block text-xs sm:text-sm truncate">{currentStorefront?.name}</span>
-                        <span className="text-[10px] text-slate-400 font-normal block truncate">{currentStorefront?.domain}</span>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <ChevronDown className={`w-4 h-4 text-indigo-600 transition-transform duration-200 ${isSiteDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {/* Searchable Dropdown Popup Menu */}
-              {isSiteDropdownOpen && (
-                <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-                  {/* Search Input Box */}
-                  <div className="p-2.5 border-b border-slate-100 bg-slate-50/70">
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Tìm tên website hoặc domain..."
-                        value={siteSearchTerm}
-                        onChange={(e) => setSiteSearchTerm(e.target.value)}
-                        className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Storefront List */}
-                  <div className="max-h-64 overflow-y-auto p-1.5 space-y-1">
-                    {/* Option: All Websites */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedSite('all');
-                        setIsSiteDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                        selectedSite === 'all' 
-                          ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
-                          : 'hover:bg-slate-50 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
+                {/* Dropdown Trigger Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsSiteDropdownOpen(!isSiteDropdownOpen)}
+                  className="w-full px-4 py-2 rounded-2xl border-2 border-indigo-600 bg-white hover:bg-indigo-50/40 text-slate-900 font-bold text-xs flex items-center justify-between gap-3 shadow-xs transition-all focus:outline-none focus:ring-4 focus:ring-indigo-500/20 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    {selectedSite === 'all' ? (
+                      <>
+                        <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center flex-shrink-0">
                           <Globe className="w-3.5 h-3.5" />
                         </div>
-                        <div>
-                          <div className="font-bold">🌐 Xem Tất Cả ({STOREFRONTS.length} Website)</div>
-                          <div className="text-[10px] text-slate-400">Xem và lọc toàn bộ sách hệ thống</div>
+                        <div className="text-left truncate">
+                          <span className="font-bold text-indigo-950 block text-xs truncate">Tất cả {STOREFRONTS.length} Website</span>
                         </div>
-                      </div>
-                      {selectedSite === 'all' && <Check className="w-4 h-4 text-indigo-600" />}
-                    </button>
-
-                    <div className="h-px bg-slate-100 my-1" />
-
-                    {/* Filtered Storefronts */}
-                    {filteredStorefronts.map((site) => {
-                      const isSelected = selectedSite === site.id;
-                      return (
-                        <button
-                          key={site.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedSite(site.id);
-                            setIsSiteDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
-                            isSelected 
-                              ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
-                              : 'hover:bg-slate-50 text-slate-700'
-                          }`}
+                      </>
+                    ) : (
+                      <>
+                        <div 
+                          className="w-6 h-6 rounded-lg flex items-center justify-center text-white font-black text-[10px] flex-shrink-0 shadow-xs"
+                          style={{ backgroundColor: currentStorefront?.themeColor || '#4F46E5' }}
                         >
-                          <div className="flex items-center gap-2.5 truncate pr-2">
-                            <div 
-                              className="w-6 h-6 rounded-lg flex items-center justify-center text-white font-extrabold text-[10px] shadow-xs flex-shrink-0"
-                              style={{ backgroundColor: site.themeColor }}
-                            >
-                              {site.name.substring(0, 2).toUpperCase()}
-                            </div>
-                            <div className="truncate">
-                              <div className="font-bold text-slate-800 truncate">{site.name}</div>
-                              <div className="text-[10px] text-slate-400 font-mono truncate">{site.domain}</div>
-                            </div>
-                          </div>
-                          {isSelected && <Check className="w-4 h-4 text-indigo-600 flex-shrink-0" />}
-                        </button>
-                      );
-                    })}
-
-                    {filteredStorefronts.length === 0 && (
-                      <div className="text-center py-4 text-xs text-slate-400">
-                        Không tìm thấy website nào phù hợp
-                      </div>
+                          {currentStorefront?.name.substring(0, 2).toUpperCase() || 'WB'}
+                        </div>
+                        <div className="text-left truncate">
+                          <span className="font-bold text-slate-900 block text-xs truncate">{currentStorefront?.name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono block truncate">{currentStorefront?.domain}</span>
+                        </div>
+                      </>
                     )}
                   </div>
-                </div>
-              )}
-            </div>
+                  <ChevronDown className={`w-4 h-4 text-indigo-600 transition-transform duration-200 ${isSiteDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
 
-            {/* Navigation Tabs */}
-            <div className="flex bg-slate-100 p-1 rounded-2xl self-end sm:self-center">
+                {/* Searchable Dropdown Popup Menu */}
+                {isSiteDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                    <div className="p-2.5 border-b border-slate-100 bg-slate-50/70">
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          autoFocus
+                          placeholder="Tìm tên website hoặc domain..."
+                          value={siteSearchTerm}
+                          onChange={(e) => setSiteSearchTerm(e.target.value)}
+                          className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-medium"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="max-h-64 overflow-y-auto p-1.5 space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSite('all');
+                          setIsSiteDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                          selectedSite === 'all' 
+                            ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
+                            : 'hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
+                            <Globe className="w-3.5 h-3.5" />
+                          </div>
+                          <div>
+                            <div className="font-bold">🌐 Xem Tất Cả ({STOREFRONTS.length} Website)</div>
+                            <div className="text-[10px] text-slate-400">Xem và lọc toàn bộ sách hệ thống</div>
+                          </div>
+                        </div>
+                        {selectedSite === 'all' && <Check className="w-4 h-4 text-indigo-600" />}
+                      </button>
+
+                      <div className="h-px bg-slate-100 my-1" />
+
+                      {filteredStorefronts.map((site) => {
+                        const isSelected = selectedSite === site.id;
+                        return (
+                          <button
+                            key={site.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedSite(site.id);
+                              setIsSiteDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between text-xs transition-colors cursor-pointer ${
+                              isSelected 
+                                ? 'bg-indigo-50 text-indigo-900 font-bold border border-indigo-200' 
+                                : 'hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 truncate pr-2">
+                              <div 
+                                className="w-6 h-6 rounded-lg flex items-center justify-center text-white font-extrabold text-[10px] shadow-xs flex-shrink-0"
+                                style={{ backgroundColor: site.themeColor }}
+                              >
+                                {site.name.substring(0, 2).toUpperCase()}
+                              </div>
+                              <div className="truncate">
+                                <div className="font-bold text-slate-800 truncate">{site.name}</div>
+                                <div className="text-[10px] text-slate-400 font-mono truncate">{site.domain}</div>
+                              </div>
+                            </div>
+                            {isSelected && <Check className="w-4 h-4 text-indigo-600 flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-2xl">
+                <button
+                  onClick={() => setActiveTab('books')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'books'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <BookIcon className="w-3.5 h-3.5" />
+                  Sách ({books.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('stripe')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'stripe'
+                      ? 'bg-white text-indigo-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  Stripe ({currentSiteStripeSettings.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('paypal')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'paypal'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <span className="font-extrabold text-[#0079C1] text-xs">P</span>
+                  PayPal ({currentSitePayPalSettings.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('tickets')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'tickets'
+                      ? 'bg-white text-rose-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  Hỗ Trợ ({currentSiteTickets.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('orders')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'orders'
+                      ? 'bg-white text-emerald-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <ShoppingBag className="w-3.5 h-3.5" />
+                  Đơn Hàng ({currentSiteOrders.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('whop')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'whop'
+                      ? 'bg-white text-orange-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-[#FF6243] animate-pulse"></span>
+                  <span className="font-extrabold text-[#FF6243]">W</span>
+                  Whop ({whopLinks.length})
+                </button>
+              </div>
+
+              {/* Admin Profile & Logout Button */}
+              <div className="flex items-center gap-2 pl-1">
+                <span className="px-3 py-2 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                  lichdt
+                </span>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="p-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200 transition-colors cursor-pointer"
+                  title="Đăng xuất quản trị"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => setActiveTab('books')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === 'books'
-                    ? 'bg-white text-indigo-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
+                type="button"
+                onClick={() => setIsLoginModalOpen(true)}
+                className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-200 flex items-center gap-2 transition-all cursor-pointer hover:scale-105 active:scale-95"
               >
-                <BookIcon className="w-3.5 h-3.5" />
-                Sách ({books.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('stripe')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === 'stripe'
-                    ? 'bg-white text-indigo-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <CreditCard className="w-3.5 h-3.5" />
-                Stripe ({currentSiteStripeSettings.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('paypal')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === 'paypal'
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <span className="font-extrabold text-[#0079C1] text-xs">P</span>
-                PayPal ({currentSitePayPalSettings.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('tickets')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === 'tickets'
-                    ? 'bg-white text-rose-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <Mail className="w-3.5 h-3.5" />
-                Hỗ Trợ ({currentSiteTickets.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('orders')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === 'orders'
-                    ? 'bg-white text-emerald-600 shadow-sm'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <ShoppingBag className="w-3.5 h-3.5" />
-                Đơn Hàng ({currentSiteOrders.length})
+                <Lock className="w-4 h-4" />
+                <span>Đăng Nhập Quản Trị</span>
               </button>
             </div>
-          </div>
+          )}
         </header>
 
-        {/* Current Active Storefront Banner */}
-        <div className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-md">
-          <div className="flex items-center gap-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span className="text-xs text-slate-300 font-medium">Đang làm việc trên:</span>
-            <span className="text-sm font-bold text-white flex items-center gap-2">
-              {selectedSite === 'all' ? 'Tất Cả 11 Website' : currentStorefront?.name}
-              {selectedSite !== 'all' && currentStorefront?.domain && (
-                <span className="text-xs text-slate-400 font-normal">({currentStorefront.domain})</span>
-              )}
-            </span>
+        {/* Current Active Storefront Banner (Admin Only) */}
+        {isAdminLoggedIn && (
+          <div className="bg-slate-900 text-white px-6 py-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-md">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="text-xs text-slate-300 font-medium">Đang làm việc trên:</span>
+              <span className="text-sm font-bold text-white flex items-center gap-2">
+                {selectedSite === 'all' ? 'Tất Cả 11 Website' : currentStorefront?.name}
+                {selectedSite !== 'all' && currentStorefront?.domain && (
+                  <span className="text-xs text-slate-400 font-normal">({currentStorefront.domain})</span>
+                )}
+              </span>
+            </div>
+            <div className="flex items-center gap-4 text-xs flex-wrap">
+              <span className="text-slate-400">
+                📚 Sách: <strong className="text-white">{books.length} cuốn</strong>
+              </span>
+              <span className="text-slate-400">
+                💳 Cổng Stripe: <strong className={activeStripeSettingForSite ? "text-emerald-400" : "text-amber-400"}>
+                  {activeStripeSettingForSite ? activeStripeSettingForSite.account_name : "Chưa cấu hình"}
+                </strong>
+              </span>
+              <span className="text-slate-400">
+                🅿️ Cổng PayPal: <strong className={activePayPalSettingForSite ? "text-blue-400" : "text-amber-400"}>
+                  {activePayPalSettingForSite ? `${activePayPalSettingForSite.account_name} (${activePayPalSettingForSite.mode.toUpperCase()})` : "Chưa cấu hình"}
+                </strong>
+              </span>
+              <span className="text-slate-400">
+                ⚡ Whop Links: <strong className="text-orange-400">{whopLinks.length} links ({whopUsers.length} users)</strong>
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-4 text-xs flex-wrap">
-            <span className="text-slate-400">
-              📚 Sách: <strong className="text-white">{books.length} cuốn</strong>
-            </span>
-            <span className="text-slate-400">
-              💳 Cổng Stripe: <strong className={activeStripeSettingForSite ? "text-emerald-400" : "text-amber-400"}>
-                {activeStripeSettingForSite ? activeStripeSettingForSite.account_name : "Chưa cấu hình"}
-              </strong>
-            </span>
-            <span className="text-slate-400">
-              🅿️ Cổng PayPal: <strong className={activePayPalSettingForSite ? "text-blue-400" : "text-amber-400"}>
-                {activePayPalSettingForSite ? `${activePayPalSettingForSite.account_name} (${activePayPalSettingForSite.mode.toUpperCase()})` : "Chưa cấu hình"}
-              </strong>
-            </span>
-          </div>
-        </div>
+        )}
 
-        {/* TAB 1: BOOKS MANAGEMENT */}
-        {activeTab === 'books' && (
+        {/* TAB 1: BOOKS MANAGEMENT (ADMIN ONLY) */}
+        {isAdminLoggedIn && activeTab === 'books' && (
           <div className="space-y-4">
             {/* Action Bar */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
@@ -1543,8 +2006,8 @@ export default function BookManagePage() {
           </div>
         )}
 
-        {/* TAB 2: STRIPE CONFIGURATION */}
-        {activeTab === 'stripe' && (
+        {/* TAB 2: STRIPE CONFIGURATION (ADMIN ONLY) */}
+        {isAdminLoggedIn && activeTab === 'stripe' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
               <div>
@@ -1749,8 +2212,8 @@ export default function BookManagePage() {
           </div>
         )}
 
-        {/* TAB 3: PAYPAL SETTINGS MANAGEMENT */}
-        {activeTab === 'paypal' && (
+        {/* TAB 3: PAYPAL SETTINGS MANAGEMENT (ADMIN ONLY) */}
+        {isAdminLoggedIn && activeTab === 'paypal' && (
           <div className="space-y-4">
             {/* Header / Actions */}
             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
@@ -1970,8 +2433,8 @@ export default function BookManagePage() {
           </div>
         )}
 
-        {/* TAB 4: SUPPORT INQUIRIES & TICKETS */}
-        {activeTab === 'tickets' && (
+        {/* TAB 4: SUPPORT INQUIRIES & TICKETS (ADMIN ONLY) */}
+        {isAdminLoggedIn && activeTab === 'tickets' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
               <div>
@@ -2145,8 +2608,8 @@ export default function BookManagePage() {
           </div>
         )}
 
-        {/* TAB 5: CUSTOMER ORDERS (LIFECYCLE & AUTO-PURGE) */}
-        {activeTab === 'orders' && (
+        {/* TAB 5: CUSTOMER ORDERS (ADMIN ONLY) */}
+        {isAdminLoggedIn && activeTab === 'orders' && (
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
               <div>
@@ -2393,7 +2856,552 @@ export default function BookManagePage() {
             </div>
           </div>
         )}
+
+        {/* TAB 6: WHOP LINKS & ACCOUNTS MANAGEMENT (SUPER CLEAN & FAST) */}
+        {activeTab === 'whop' && (
+          <div className="space-y-5">
+            {/* User Sub-Tabs */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+              {whopUsers.map((u) => {
+                const isSelected = (selectedWhopUser || whopUsers[0]?.id) === u.id;
+                const count = whopLinks.filter(l => l.user_id === u.id).length;
+                const uColor = u.color || '#FF6243';
+                return (
+                  <div
+                    key={u.id}
+                    onClick={() => setSelectedWhopUser(u.id)}
+                    className={`group px-3.5 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 flex-shrink-0 cursor-pointer border ${
+                      isSelected
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm ring-2 ring-slate-900/10'
+                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 shadow-2xs'
+                    }`}
+                  >
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0 shadow-xs ring-2 ring-white" 
+                      style={{ backgroundColor: uColor }} 
+                    />
+                    <span>{u.name}</span>
+                    <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      {count}
+                    </span>
+
+                    {/* Quick Edit & Delete user buttons */}
+                    <div className="flex items-center gap-0.5 pl-1 border-l border-slate-300/40">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartEditWhopUser(u);
+                        }}
+                        className={`p-1 rounded-md transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'text-slate-300 hover:text-white hover:bg-white/20'
+                            : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                        }`}
+                        title={`Sửa tên & màu tab ${u.name}`}
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteWhopUser(u.id, u.name);
+                        }}
+                        className={`p-1 rounded-md transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'text-slate-300 hover:text-rose-300 hover:bg-rose-500/20'
+                            : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                        }`}
+                        title={`Xóa tab ${u.name}`}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={handleStartAddWhopUser}
+                className="px-3.5 py-2 rounded-2xl text-xs font-bold border border-dashed border-slate-300 hover:border-orange-500 bg-white hover:bg-orange-50/50 text-slate-600 hover:text-orange-600 flex items-center gap-1.5 flex-shrink-0 transition-all cursor-pointer shadow-2xs"
+                title="Thêm tab User mới"
+              >
+                <Plus className="w-3.5 h-3.5 text-orange-500" /> Thêm Tab
+              </button>
+            </div>
+
+            {/* Quick Add Bar: Dán Link là Thêm Ngay! */}
+            <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+              <form onSubmit={handleQuickAddWhopLink} className="flex flex-col sm:flex-row items-center gap-2.5">
+                <div className="relative flex-1 w-full">
+                  <Link2 className="w-4 h-4 text-orange-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Dán đường link Whop vào đây (ví dụ: https://whop.com/get-landed/...)..."
+                    value={quickWhopUrl}
+                    onChange={(e) => setQuickWhopUrl(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 text-xs rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 font-mono text-slate-800 bg-slate-50 focus:bg-white"
+                  />
+                </div>
+
+                <div className="w-full sm:w-56">
+                  <input
+                    type="text"
+                    placeholder="Tên gợi nhớ (tùy chọn)"
+                    value={quickWhopTitle}
+                    onChange={(e) => setQuickWhopTitle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 text-slate-800 bg-slate-50 focus:bg-white font-medium"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={!quickWhopUrl.trim() || isSubmitting}
+                  className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-50 flex-shrink-0"
+                >
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                  Thêm Link
+                </button>
+              </form>
+
+              {/* Live Preview Box (Rich OpenGraph Card preview while pasting) */}
+              {isPreviewLoading && (
+                <div className="p-3 bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex items-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
+                  <span>Đang tải thông tin & hình ảnh xem trước từ link Whop...</span>
+                </div>
+              )}
+
+              {quickWhopPreview && !isPreviewLoading && (
+                <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-2 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                    <span className="flex items-center gap-1 text-orange-600 font-bold">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Xem trước thông tin (Rich Preview):
+                    </span>
+                    <span className="font-mono truncate max-w-xs">{quickWhopPreview.url}</span>
+                  </div>
+
+                  {/* Telegram / Discord Embed Box */}
+                  <div className="border-l-4 border-orange-500 pl-3.5 py-1 space-y-1.5 bg-white/70 p-3 rounded-xl border-r border-t border-b border-slate-200/70 shadow-xs">
+                    <div className="text-[11px] font-bold text-orange-600 uppercase tracking-wider">
+                      {quickWhopPreview.site_name || 'Whop'}
+                    </div>
+                    <div className="font-bold text-slate-900 text-sm">
+                      {quickWhopTitle.trim() || quickWhopPreview.title}
+                    </div>
+                    {quickWhopPreview.description && (
+                      <div className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                        {quickWhopPreview.description}
+                      </div>
+                    )}
+                    {quickWhopPreview.image && (
+                      <div className="pt-1">
+                        <img
+                          src={quickWhopPreview.image}
+                          alt="Whop preview banner"
+                          className="w-full max-h-48 object-cover rounded-xl border border-slate-200 shadow-xs"
+                          onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Links List */}
+            {whopLoading ? (
+              <div className="bg-white rounded-3xl p-12 text-center border border-slate-200">
+                <Loader2 className="w-8 h-8 animate-spin mx-auto text-orange-500 mb-2" />
+                <span className="text-xs text-slate-500 font-bold">Đang tải danh sách link...</span>
+              </div>
+            ) : filteredWhopLinks.length === 0 ? (
+              <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-500 flex items-center justify-center mx-auto border border-orange-100">
+                  <Link2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm">Chưa có link Whop nào</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Dán đường link Whop vào ô trên để thêm link truy cập nhanh!
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredWhopLinks.map((link) => {
+                  const userObj = whopUsers.find(u => u.id === link.user_id);
+                  const isCopied = copiedWhopLinkId === link.id;
+                  const uColor = userObj?.color || '#FF6243';
+
+                  return (
+                    <div
+                      key={link.id}
+                      className="bg-white rounded-2xl border border-slate-200 hover:border-orange-300 shadow-xs hover:shadow-md transition-all p-4 flex flex-col justify-between gap-3.5 group"
+                    >
+                      <div className="space-y-2.5">
+                        {/* User & Meta Badge */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-800 border border-slate-200">
+                            <span 
+                              className="w-2 h-2 rounded-full flex-shrink-0" 
+                              style={{ backgroundColor: uColor }} 
+                            />
+                            <span>{userObj?.name || link.user_name || 'User'}</span>
+                          </span>
+
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {link.created_at ? new Date(link.created_at).toLocaleDateString('vi-VN') : ''}
+                          </span>
+                        </div>
+
+                        {/* Top URL string (Telegram style) */}
+                        <a
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] font-mono text-sky-600 hover:text-sky-700 hover:underline truncate block"
+                          title={link.url}
+                        >
+                          {link.url}
+                        </a>
+
+                        {/* Telegram Rich Embed Card Container */}
+                        <div className="border-l-4 pl-3 py-1 space-y-1.5 bg-slate-50/60 p-3 rounded-xl border border-slate-100" style={{ borderLeftColor: uColor }}>
+                          <div className="text-[10px] font-bold text-orange-600 uppercase tracking-wider flex items-center justify-between">
+                            <span>{link.site_name || 'Whop'}</span>
+                            <ExternalLink className="w-3 h-3 text-slate-400 opacity-60" />
+                          </div>
+
+                          <div className="font-bold text-slate-900 text-sm line-clamp-2 group-hover:text-orange-600 transition-colors">
+                            {link.title || link.url}
+                          </div>
+
+                          {link.description && (
+                            <div className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                              {link.description}
+                            </div>
+                          )}
+
+                          {/* Image preview banner if present */}
+                          {link.image_url && (
+                            <div className="pt-1">
+                              <img
+                                src={link.image_url}
+                                alt={link.title || 'Whop preview'}
+                                className="w-full max-h-40 object-cover rounded-xl border border-slate-200 shadow-2xs group-hover:scale-[1.01] transition-transform"
+                                onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+                        {/* Open Link / Buy Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWhopLink(link)}
+                          className="flex-1 py-2.5 px-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Zap className="w-3.5 h-3.5 fill-current" />
+                          <span>Mở Whop Mua</span>
+                          <ArrowUpRight className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Copy Link Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleCopyWhopLink(link)}
+                          className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                            isCopied
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                              : 'border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                          title="Sao chép link"
+                        >
+                          {isCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                        </button>
+
+                        {/* Edit Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditWhopLink(link)}
+                          className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                          title="Sửa link"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+
+                        {/* Delete Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteWhopLink(link.id)}
+                          className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Xóa link"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Add / Edit Whop Link Modal */}
+      {isWhopLinkModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-orange-500 text-white flex items-center justify-center font-bold text-xs">
+                  W
+                </span>
+                {editingWhopLink ? "Sửa Link Whop" : "Thêm Link Whop Mới"}
+              </h2>
+              <button 
+                onClick={() => setIsWhopLinkModalOpen(false)} 
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWhopLinkSubmit} className="p-6 sm:p-7 space-y-4 text-xs">
+              {/* Select User */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Tài Khoản Whop (User) <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  required
+                  value={whopLinkFormData.user_id}
+                  onChange={(e) => setWhopLinkFormData({ ...whopLinkFormData, user_id: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none text-slate-800 text-sm font-semibold bg-white cursor-pointer"
+                >
+                  {whopUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      👤 {u.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Whop URL */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Đường Link Whop <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  placeholder="https://whop.com/checkout/..."
+                  value={whopLinkFormData.url}
+                  onChange={(e) => setWhopLinkFormData({ ...whopLinkFormData, url: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none font-mono text-xs text-slate-800"
+                />
+              </div>
+
+              {/* Title (Optional) */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Tên Gợi Nhớ (Tùy chọn)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ví dụ: Ebook Vip, Khóa học kinh doanh..."
+                  value={whopLinkFormData.title}
+                  onChange={(e) => setWhopLinkFormData({ ...whopLinkFormData, title: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none text-slate-800 text-sm"
+                />
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-4 flex gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsWhopLinkModalOpen(false)}
+                  className="flex-1 px-5 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  disabled={isSubmitting}
+                  type="submit"
+                  className="flex-2 px-6 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {editingWhopLink ? "Cập Nhật Link" : "Lưu Link"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Whop User Modal */}
+      {isWhopUserModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+              <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span 
+                  className="w-7 h-7 rounded-xl flex items-center justify-center text-white shadow-xs"
+                  style={{ backgroundColor: whopUserFormData.color || '#FF6243' }}
+                >
+                  <Users className="w-4 h-4" />
+                </span>
+                {editingWhopUser ? "Sửa Tên & Màu Tab User" : "Thêm Tab User Mới"}
+              </h2>
+              <button
+                onClick={() => setIsWhopUserModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveWhopUserSubmit} className="p-6 space-y-4 text-xs">
+              {/* User Tab Name */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Tên Tab User <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  placeholder="Ví dụ: User 1, User 2, Whop Store US, Nick Phụ..."
+                  value={whopUserFormData.name}
+                  onChange={(e) => setWhopUserFormData({ ...whopUserFormData, name: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 outline-none text-slate-800 text-sm font-semibold"
+                />
+              </div>
+
+              {/* Color Picker Section */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Palette className="w-3.5 h-3.5 text-orange-500" />
+                    Màu Nhận Diện Tab
+                  </label>
+                  <span className="text-[11px] font-mono text-slate-400 uppercase">
+                    {whopUserFormData.color || '#FF6243'}
+                  </span>
+                </div>
+
+                {/* Preset Palette */}
+                <div className="grid grid-cols-6 gap-2 mb-3">
+                  {[
+                    { color: '#FF6243', label: 'Whop Cam' },
+                    { color: '#6366F1', label: 'Indigo' },
+                    { color: '#10B981', label: 'Emerald' },
+                    { color: '#0EA5E9', label: 'Sky Blue' },
+                    { color: '#8B5CF6', label: 'Purple' },
+                    { color: '#F43F5E', label: 'Rose Red' },
+                    { color: '#F59E0B', label: 'Amber' },
+                    { color: '#06B6D4', label: 'Cyan' },
+                    { color: '#84CC16', label: 'Lime' },
+                    { color: '#EC4899', label: 'Pink' },
+                    { color: '#14B8A6', label: 'Teal' },
+                    { color: '#3B82F6', label: 'Blue' },
+                  ].map((item) => (
+                    <button
+                      key={item.color}
+                      type="button"
+                      onClick={() => setWhopUserFormData({ ...whopUserFormData, color: item.color })}
+                      className={`h-8 rounded-xl transition-all cursor-pointer flex items-center justify-center border ${
+                        whopUserFormData.color?.toLowerCase() === item.color.toLowerCase()
+                          ? 'border-slate-800 ring-2 ring-slate-800/30 scale-105 shadow-xs'
+                          : 'border-transparent opacity-85 hover:opacity-100 hover:scale-105'
+                      }`}
+                      style={{ backgroundColor: item.color }}
+                      title={item.label}
+                    >
+                      {whopUserFormData.color?.toLowerCase() === item.color.toLowerCase() && (
+                        <Check className="w-4 h-4 text-white stroke-[3] drop-shadow-sm" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Color Input */}
+                <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                  <input
+                    type="color"
+                    value={whopUserFormData.color || '#FF6243'}
+                    onChange={(e) => setWhopUserFormData({ ...whopUserFormData, color: e.target.value })}
+                    className="w-8 h-8 rounded-lg cursor-pointer border-0 bg-transparent p-0"
+                    title="Tùy chọn màu bất kỳ"
+                  />
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={whopUserFormData.color}
+                      onChange={(e) => setWhopUserFormData({ ...whopUserFormData, color: e.target.value })}
+                      placeholder="#FF6243"
+                      className="w-full bg-white px-3 py-1 text-xs font-mono rounded-lg border border-slate-200 outline-none uppercase font-bold text-slate-700"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-slate-200 text-xs font-bold text-slate-700">
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full" 
+                      style={{ backgroundColor: whopUserFormData.color || '#FF6243' }} 
+                    />
+                    <span>{whopUserFormData.name || 'Preview'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="pt-4 flex items-center justify-between gap-2 border-t border-slate-100">
+                {editingWhopUser ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsWhopUserModalOpen(false);
+                      handleDeleteWhopUser(editingWhopUser.id, editingWhopUser.name);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl border border-rose-200 hover:bg-rose-50 text-rose-600 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Xóa User
+                  </button>
+                ) : (
+                  <div></div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsWhopUserModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    disabled={isSubmitting}
+                    type="submit"
+                    className="px-5 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-md shadow-orange-500/20 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {editingWhopUser ? "Lưu Thay Đổi" : "Tạo Tab Mới"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Add / Edit Stripe Account Modal */}
       {isStripeModalOpen && (
@@ -3719,6 +4727,112 @@ export default function BookManagePage() {
                 Gửi Email Cho Khách
               </a>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Login Modal */}
+      {isLoginModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-indigo-50/70 to-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-200">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Đăng Nhập Quản Trị</h2>
+                  <p className="text-[11px] text-slate-400">Truy cập toàn bộ cài đặt hệ thống</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setIsLoginModalOpen(false);
+                  setLoginError("");
+                }} 
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Login Form */}
+            <form onSubmit={handleLoginSubmit} className="p-6 space-y-4 text-xs">
+              {loginError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-500" />
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              {/* Username Input */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Tài Khoản (Username) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="lichdt"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm font-semibold"
+                />
+              </div>
+
+              {/* Password Input */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Mật Khẩu <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showLoginPassword ? "text" : "password"}
+                    required
+                    placeholder="Nhập mật khẩu..."
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full pl-4 pr-10 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-slate-800 text-sm font-semibold"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPassword(!showLoginPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-1"
+                  >
+                    {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Helper badge */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-[11px] text-slate-500 flex items-center justify-between">
+                <span>Tài khoản: <strong className="text-indigo-600 font-mono">lichdt</strong></span>
+                <span>Mật khẩu: <strong className="text-indigo-600 font-mono">389363</strong></span>
+              </div>
+
+              {/* Modal Buttons */}
+              <div className="pt-3 flex gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLoginModalOpen(false);
+                    setLoginError("");
+                  }}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 transition-all text-xs cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="flex-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-200 flex items-center justify-center gap-2 cursor-pointer transition-all hover:scale-102 active:scale-98"
+                >
+                  <LogIn className="w-4 h-4" />
+                  Đăng Nhập Quản Trị
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
