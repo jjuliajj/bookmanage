@@ -777,6 +777,8 @@ function saveLocalWhopLinks(links: any[]) {
   } catch {}
 }
 
+const isUUID = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+
 // 1. Fetch Whop Users
 export async function fetchWhopUsersDirect(): Promise<any[]> {
   try {
@@ -786,9 +788,25 @@ export async function fetchWhopUsersDirect(): Promise<any[]> {
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true });
 
-    if (!error && data && data.length > 0) {
-      saveLocalWhopUsers(data);
-      return data;
+    if (!error && data) {
+      if (data.length > 0) {
+        saveLocalWhopUsers(data);
+        return data;
+      } else {
+        // Table exists in Supabase but has 0 rows -> Seed initial default users so they get real UUIDs!
+        const defaultToSeed = [
+          { name: 'Acc chính đã xác minh', slug: 'acc-chinh', description: 'Tài khoản chính', color: '#FF6243', sort_order: 1 },
+          { name: 'User 2', slug: 'user-2', description: 'Tài khoản phụ', color: '#6366F1', sort_order: 2 }
+        ];
+        const { data: seeded, error: seedErr } = await supabase
+          .from('whop_users')
+          .insert(defaultToSeed)
+          .select();
+        if (!seedErr && seeded && seeded.length > 0) {
+          saveLocalWhopUsers(seeded);
+          return seeded;
+        }
+      }
     }
   } catch (err: any) {
     console.warn('fetchWhopUsersDirect error, falling back:', err?.message);
@@ -817,6 +835,8 @@ export async function createWhopUserDirect(data: any): Promise<any> {
       const created = res[0];
       saveLocalWhopUsers([...localList, created]);
       return created;
+    } else if (error) {
+      console.error('createWhopUserDirect db error:', error);
     }
   } catch (err: any) {
     console.warn('createWhopUserDirect db error:', err?.message);
@@ -891,7 +911,7 @@ export async function fetchWhopLinksDirect(
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (userId && userId !== 'all') {
+    if (userId && userId !== 'all' && isUUID(userId)) {
       query = query.eq('user_id', userId);
     }
     if (siteId && siteId !== 'all') {
@@ -954,40 +974,89 @@ export async function createWhopLinkDirect(data: any): Promise<any> {
     formattedUrl = `https://${formattedUrl}`;
   }
 
-  const newLink = {
-    user_id: data.user_id || 'whop-user-1',
-    user_name: data.user_name || '',
-    title: (data.title || '').trim(),
+  // Ensure target user is a real UUID in Supabase
+  let targetUserId = data.user_id;
+  try {
+    const { data: existingUsers } = await supabase.from('whop_users').select('id, name').order('created_at', { ascending: true });
+    if (existingUsers && existingUsers.length > 0) {
+      const matched = existingUsers.find(u => u.id === targetUserId || u.name === data.user_name);
+      if (matched) {
+        targetUserId = matched.id;
+      } else if (!isUUID(targetUserId)) {
+        targetUserId = existingUsers[0].id;
+      }
+    } else {
+      // Seed first user in Supabase
+      const { data: newU } = await supabase
+        .from('whop_users')
+        .insert([{ name: data.user_name || 'Acc chính đã xác minh', color: '#FF6243', sort_order: 1 }])
+        .select();
+      if (newU && newU.length > 0) {
+        targetUserId = newU[0].id;
+      }
+    }
+  } catch (userErr) {
+    console.warn('Could not verify whop_user before link insert:', userErr);
+  }
+
+  const insertPayload: any = {
+    title: (data.title || '').trim() || formattedUrl.replace(/^https?:\/\//, '').replace(/\/$/, ''),
     url: formattedUrl,
-    price: (data.price || '').trim(),
-    category: (data.category || 'Khác').trim(),
-    description: (data.description || '').trim(),
-    image_url: (data.image_url || '').trim(),
-    site_name: (data.site_name || 'Whop').trim(),
-    site_id: data.site_id || 'all',
-    clicks_count: 0,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
+    description: (data.description || '').trim() || null,
+    image_url: (data.image_url || '').trim() || null,
+    site_name: (data.site_name || 'Whop').trim() || null,
+    site_id: data.site_id || 'all'
   };
+
+  if (targetUserId && isUUID(targetUserId)) {
+    insertPayload.user_id = targetUserId;
+  }
+  if (data.user_name) insertPayload.user_name = data.user_name;
+  if (data.price) insertPayload.price = data.price;
+  if (data.category) insertPayload.category = data.category;
 
   try {
     const { data: res, error } = await supabase
       .from('whop_links')
-      .insert([newLink])
+      .insert([insertPayload])
       .select();
 
     if (!error && res && res.length > 0) {
       const created = res[0];
       saveLocalWhopLinks([created, ...localLinks]);
       return created;
+    } else if (error) {
+      console.error('Supabase whop_links insert error:', error);
+      // Retry with minimal payload if some extra column doesn't exist
+      const minimalPayload: any = {
+        title: insertPayload.title,
+        url: insertPayload.url,
+        description: insertPayload.description,
+        image_url: insertPayload.image_url,
+        site_name: insertPayload.site_name
+      };
+      if (targetUserId && isUUID(targetUserId)) {
+        minimalPayload.user_id = targetUserId;
+      }
+      const { data: minRes, error: minErr } = await supabase
+        .from('whop_links')
+        .insert([minimalPayload])
+        .select();
+      if (!minErr && minRes && minRes.length > 0) {
+        const created = minRes[0];
+        saveLocalWhopLinks([created, ...localLinks]);
+        return created;
+      }
     }
   } catch (err: any) {
-    console.warn('createWhopLinkDirect db error:', err?.message);
+    console.error('createWhopLinkDirect exception:', err);
   }
 
   const fallbackLink = {
     id: `whop-link-${Date.now()}`,
-    ...newLink
+    ...insertPayload,
+    user_id: targetUserId || 'whop-user-1',
+    created_at: new Date().toISOString()
   };
   saveLocalWhopLinks([fallbackLink, ...localLinks]);
   return fallbackLink;
