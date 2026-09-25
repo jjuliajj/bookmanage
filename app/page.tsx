@@ -488,8 +488,13 @@ export default function BookManagePage() {
         getWhopLinks(undefined, selectedSite)
       ]);
       const users = uRes.data || [];
+      const links = (lRes.data || []).sort((a: any, b: any) => {
+        const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return timeB - timeA;
+      });
       setWhopUsers(users);
-      setWhopLinks(lRes.data || []);
+      setWhopLinks(links);
       setSelectedWhopUser(prev => {
         if (!prev || prev === 'all' || !users.some(u => u.id === prev)) {
           return users[0]?.id || '';
@@ -603,14 +608,19 @@ export default function BookManagePage() {
   const isAllSelected = filteredBooks.length > 0 && selectedBookIds.length === filteredBooks.length;
   const isAnyFilterActive = Boolean(searchTerm || selectedAuthor || selectedCategory || selectedPriceFilter);
 
-  // Whop Filtered Links for Active User
+  // Whop Filtered Links for Active User (Newest First)
   const filteredWhopLinks = useMemo(() => {
     let list = whopLinks;
     const activeUserId = selectedWhopUser || whopUsers[0]?.id;
     if (activeUserId) {
       list = list.filter(l => l.user_id === activeUserId);
     }
-    return list;
+    // Always guarantee newest link is at the top
+    return [...list].sort((a, b) => {
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return timeB - timeA;
+    });
   }, [whopLinks, selectedWhopUser, whopUsers]);
 
   const whopCategories = useMemo(() => {
