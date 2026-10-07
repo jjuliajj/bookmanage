@@ -62,7 +62,8 @@ import {
   Unlock,
   LogIn,
   LogOut,
-  Shield
+  Shield,
+  UploadCloud
 } from "lucide-react";
 import { 
   getBooks, 
@@ -395,6 +396,65 @@ export default function BookManagePage() {
   });
   const [bookFile, setBookFile] = useState<File | null>(null);
   const [coverImage, setCoverImage] = useState<File | null>(null);
+  const [isDraggingCover, setIsDraggingCover] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+
+  // Tự động sinh Object URL xem trước ảnh bìa và cleanup bộ nhớ
+  useEffect(() => {
+    if (!coverImage) {
+      setCoverPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(coverImage);
+    setCoverPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [coverImage]);
+
+  // Lắng nghe sự kiện Paste (Ctrl + V) ảnh bìa từ Clipboard khi Modal đang mở
+  useEffect(() => {
+    if (!isModalOpen) return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      // 1. Kiểm tra items trong clipboard (chụp màn hình Snipping Tool, copy ảnh web)
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith("image/")) {
+            const blob = item.getAsFile();
+            if (blob) {
+              e.preventDefault();
+              const ext = blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+              const file = new File([blob], `pasted_cover_${Date.now()}.${ext}`, { type: blob.type });
+              setCoverImage(file);
+              return;
+            }
+          }
+        }
+      }
+
+      // 2. Kiểm tra files trong clipboard (Ctrl + C file ảnh từ Windows Explorer)
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.type.startsWith("image/")) {
+            e.preventDefault();
+            setCoverImage(file);
+            return;
+          }
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [isModalOpen]);
 
   // Bulk upload states
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -4224,8 +4284,8 @@ export default function BookManagePage() {
       {/* Add / Edit Book Modal Form */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[92vh] flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
               <h2 className="text-xl font-bold text-slate-800">
                 {editingBook ? "Chỉnh Sửa Chi Tiết Sách" : "Thêm Cuốn Sách Mới"}
               </h2>
@@ -4234,7 +4294,7 @@ export default function BookManagePage() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-8 space-y-5">
+            <form onSubmit={handleSubmit} className="p-8 space-y-5 overflow-y-auto flex-1">
               <div className="grid grid-cols-2 gap-4">
                 
                 {/* Storefront Selector */}
@@ -4319,28 +4379,191 @@ export default function BookManagePage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-4">
+                {/* File Sách / Thiết Kế Nội Dung */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5" /> File Sách (PDF/EPUB)
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-indigo-600" /> File Sách / File Thiết Kế (PDF / EPUB / ZIP / Vector)
+                    </span>
+                    {editingBook?.file_url && !bookFile && (
+                      <span className="text-[11px] text-slate-500 font-normal">
+                        ✓ Đã có file lưu trên hệ thống
+                      </span>
+                    )}
                   </label>
-                  <input 
-                    type="file" 
-                    accept=".pdf,.epub,.doc,.docx"
-                    onChange={(e) => setBookFile(e.target.files?.[0] || null)}
-                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
-                  />
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="file" 
+                      accept=".pdf,.epub,.doc,.docx,.zip,.rar,.ai,.eps,.cdr,.psd"
+                      onChange={(e) => setBookFile(e.target.files?.[0] || null)}
+                      className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                    />
+                    {bookFile && (
+                      <span className="text-xs text-emerald-600 font-medium truncate">
+                        ✓ Đã chọn: {bookFile.name} ({(bookFile.size / 1024).toFixed(0)} KB)
+                      </span>
+                    )}
+                  </div>
                 </div>
+
+                {/* Ảnh Bìa (Cover) - Hỗ Trợ Kéo Thả, Click & Phím Tắt Dán Ctrl + V */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <ImageIcon className="w-3.5 h-3.5" /> Ảnh Bìa (Cover)
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                      <ImageIcon className="w-3.5 h-3.5 text-indigo-600" /> Ảnh Bìa (Cover / Thumbnail)
+                    </label>
+                    <span className="text-[11px] font-semibold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-indigo-100/80">
+                      <Sparkles className="w-3 h-3 text-indigo-500" /> Kéo thả hoặc dán Ctrl + V
+                    </span>
+                  </div>
+
+                  {/* Input ẩn phục vụ cho việc click để mở file browser */}
                   <input 
+                    ref={coverInputRef}
                     type="file" 
                     accept="image/*"
-                    onChange={(e) => setCoverImage(e.target.files?.[0] || null)}
-                    className="text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) setCoverImage(e.target.files[0]);
+                    }}
+                    className="hidden"
                   />
+
+                  {/* Vùng Dropzone & Preview trực quan */}
+                  {coverPreviewUrl || editingBook?.cover_url ? (
+                    <div 
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(true); }}
+                      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(false); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingCover(false);
+                        const files = e.dataTransfer?.files;
+                        if (files && files.length > 0) {
+                          for (let i = 0; i < files.length; i++) {
+                            if (files[i].type.startsWith("image/")) {
+                              setCoverImage(files[i]);
+                              break;
+                            }
+                          }
+                        }
+                      }}
+                      className={`relative border-2 border-dashed rounded-2xl p-3.5 transition-all duration-200 ${
+                        isDraggingCover 
+                          ? "border-indigo-500 bg-indigo-50/80 ring-4 ring-indigo-500/20 scale-[1.01]" 
+                          : "border-slate-200 bg-slate-50/60 hover:border-indigo-300"
+                      }`}
+                    >
+                      <div className="flex items-center gap-4">
+                        {/* Khung thumbnail hiển thị trọn vẹn cả ảnh ngang lẫn ảnh dọc */}
+                        <div className="relative w-28 h-28 shrink-0 bg-slate-900/5 rounded-xl border border-slate-200 overflow-hidden flex items-center justify-center p-1.5 shadow-xs">
+                          <img 
+                            src={coverPreviewUrl || editingBook?.cover_url || ""} 
+                            alt="Cover Preview" 
+                            className="max-h-full max-w-full object-contain rounded-lg" 
+                          />
+                          {isDraggingCover && (
+                            <div className="absolute inset-0 bg-indigo-600/85 backdrop-blur-xs flex flex-col items-center justify-center text-white text-[11px] font-bold text-center px-1">
+                              <UploadCloud className="w-6 h-6 animate-bounce mb-1" />
+                              Thả để đổi ảnh
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Chi tiết ảnh & Thao tác */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            {coverImage ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Ảnh mới chọn / dán
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                                Ảnh hiện tại của sách
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs font-semibold text-slate-800 truncate" title={coverImage?.name || "Ảnh bìa hiện tại"}>
+                            {coverImage ? coverImage.name : (editingBook?.title ? `Ảnh bìa: ${editingBook.title}` : "Ảnh bìa hiện tại")}
+                          </p>
+                          {coverImage && (
+                            <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                              Dung lượng: {(coverImage.size / 1024).toFixed(1)} KB
+                            </p>
+                          )}
+                          <p className="text-[11px] text-indigo-600 mt-1.5 flex items-center gap-1">
+                            💡 Kéo thả ảnh khác hoặc ấn <b>Ctrl + V</b> để thay thế ngay
+                          </p>
+
+                          <div className="flex items-center gap-2.5 mt-2.5">
+                            <button
+                              type="button"
+                              onClick={() => coverInputRef.current?.click()}
+                              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer flex items-center gap-1.5"
+                            >
+                              <UploadCloud className="w-3.5 h-3.5" /> Đổi ảnh từ máy
+                            </button>
+                            {coverImage && (
+                              <button
+                                type="button"
+                                onClick={() => setCoverImage(null)}
+                                className="px-2.5 py-1.5 text-xs font-medium rounded-lg text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Hủy ảnh vừa chọn
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Dropzone khi chưa có ảnh */
+                    <div
+                      onClick={() => coverInputRef.current?.click()}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(true); }}
+                      onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDraggingCover(false); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setIsDraggingCover(false);
+                        const files = e.dataTransfer?.files;
+                        if (files && files.length > 0) {
+                          for (let i = 0; i < files.length; i++) {
+                            if (files[i].type.startsWith("image/")) {
+                              setCoverImage(files[i]);
+                              break;
+                            }
+                          }
+                        }
+                      }}
+                      className={`border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-all duration-200 group flex flex-col items-center justify-center ${
+                        isDraggingCover 
+                          ? "border-indigo-500 bg-indigo-50/80 ring-4 ring-indigo-500/20 scale-[1.01]" 
+                          : "border-slate-300 hover:border-indigo-400 bg-slate-50/50 hover:bg-indigo-50/20"
+                      }`}
+                    >
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-2 transition-transform group-hover:scale-110 ${
+                        isDraggingCover ? "bg-indigo-600 text-white animate-bounce" : "bg-indigo-100 text-indigo-600"
+                      }`}>
+                        <UploadCloud className="w-6 h-6" />
+                      </div>
+                      <div className="text-xs font-bold text-slate-800">
+                        Kéo &amp; thả ảnh vào đây, hoặc <span className="text-indigo-600 underline">bấm để tải lên</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1 flex-wrap justify-center">
+                        <span>Hoặc dán trực tiếp bằng phím tắt</span>
+                        <kbd className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-mono text-[10px] font-bold border border-slate-300">Ctrl</kbd>
+                        <span>+</span>
+                        <kbd className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-mono text-[10px] font-bold border border-slate-300">V</kbd>
+                        <span>(Clipboard / Chụp màn hình)</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1.5">
+                        Hỗ trợ PNG, JPG, WEBP, SVG
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
